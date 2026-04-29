@@ -158,6 +158,7 @@ class SlaveMessageProcessor(LocaleMixin):
 
         # When targeting a message (reply to)
         target_msg_id: Optional[TelegramMessageID] = None
+        target_quote_text: Optional[str] = None
         if isinstance(msg.target, Message):
             self.logger.debug("[%s] Message is replying to %s.", msg.uid, msg.target)
             log = self.db.get_msg_log(
@@ -178,6 +179,7 @@ class SlaveMessageProcessor(LocaleMixin):
                     target_msg_id = None
                 else:
                     target_msg_id = target_msg[1]
+                    target_quote_text = log.text
 
         # Generate basic reply markup
         commands: Optional[List[MessageCommand]] = None
@@ -197,41 +199,51 @@ class SlaveMessageProcessor(LocaleMixin):
         # Type dispatching
         if msg.type == MsgType.Text:
             tg_msg = self.slave_message_text(msg, tg_dest, thread_id, msg_template, reactions, old_msg_id, target_msg_id,
+                                             target_quote_text,
                                              reply_markup, silent)
         elif msg.type == MsgType.Link:
             tg_msg = self.slave_message_link(msg, tg_dest, thread_id, msg_template, reactions, old_msg_id, target_msg_id,
+                                             target_quote_text,
                                              reply_markup, silent)
         elif msg.type == MsgType.Sticker:
             tg_msg = self.slave_message_sticker(msg, tg_dest, thread_id, msg_template, reactions, old_msg_id, target_msg_id,
+                                                target_quote_text,
                                                 reply_markup, silent)
         elif msg.type == MsgType.Image:
             if self.flag("send_image_as_file"):
                 tg_msg = self.slave_message_file(msg, tg_dest, thread_id, msg_template, reactions, old_msg_id, target_msg_id,
+                                                 target_quote_text,
                                                  reply_markup, silent)
             else:
                 tg_msg = self.slave_message_image(msg, tg_dest, thread_id, msg_template, reactions, old_msg_id, target_msg_id,
+                                                  target_quote_text,
                                                   reply_markup, silent)
         elif msg.type == MsgType.Animation:
             tg_msg = self.slave_message_animation(msg, tg_dest, thread_id, msg_template, reactions, old_msg_id, target_msg_id,
+                                                  target_quote_text,
                                                   reply_markup, silent)
         elif msg.type == MsgType.File:
             tg_msg = self.slave_message_file(msg, tg_dest, thread_id, msg_template, reactions, old_msg_id, target_msg_id,
+                                             target_quote_text,
                                              reply_markup, silent)
         elif msg.type == MsgType.Voice:
             tg_msg = self.slave_message_voice(msg, tg_dest, thread_id, msg_template, reactions, old_msg_id, target_msg_id,
+                                              target_quote_text,
                                               reply_markup, silent)
         elif msg.type == MsgType.Location:
             tg_msg = self.slave_message_location(msg, tg_dest, thread_id, msg_template, reactions, old_msg_id, target_msg_id,
+                                                 target_quote_text,
                                                  reply_markup, silent)
         elif msg.type == MsgType.Video:
             tg_msg = self.slave_message_video(msg, tg_dest, thread_id, msg_template, reactions, old_msg_id, target_msg_id,
+                                              target_quote_text,
                                               reply_markup, silent)
         elif msg.type == MsgType.Status:
             # Status messages are not to be recorded in databases
             return self.slave_message_status(msg, tg_dest, thread_id)
         elif msg.type == MsgType.Unsupported:
             tg_msg = self.slave_message_unsupported(msg, tg_dest, thread_id, msg_template, reactions, old_msg_id,
-                                                    target_msg_id, reply_markup, silent)
+                                                    target_msg_id, target_quote_text, reply_markup, silent)
         else:
             self.bot.send_chat_action(tg_dest, ChatAction.TYPING, message_thread_id=thread_id)
             tg_msg = self.bot.send_message(
@@ -242,7 +254,8 @@ class SlaveMessageProcessor(LocaleMixin):
                 reply_markup=reply_markup,
                 message_thread_id=thread_id,
                 disable_notification=silent,
-                text=self._('Unknown type of message "{0}". (UT01)').format(msg.type.name)
+                text=self._('Unknown type of message "{0}". (UT01)').format(msg.type.name),
+                **self.build_reply_target_kwargs(target_msg_id, target_quote_text)
             )
 
         if tg_msg and commands:
@@ -345,6 +358,7 @@ class SlaveMessageProcessor(LocaleMixin):
                            thread_id: Optional[TelegramTopicID], msg_template: str, reactions: str,
                            old_msg_id: OldMsgID = None,
                            target_msg_id: Optional[TelegramMessageID] = None,
+                           target_quote_text: Optional[str] = None,
                            reply_markup: Optional[ReplyMarkup] = None,
                            silent: bool = False) -> telegram.Message:
         """
@@ -373,10 +387,10 @@ class SlaveMessageProcessor(LocaleMixin):
             tg_msg = self.bot.send_message(tg_dest,
                                            text=text, prefix=text_prefix, suffix=reactions,
                                            parse_mode='HTML',
-                                           reply_to_message_id=target_msg_id,
                                            message_thread_id=thread_id,
                                            reply_markup=reply_markup,
-                                           disable_notification=silent)
+                                           disable_notification=silent,
+                                           **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
         else:
             # Cannot change reply_to_message_id when editing a message
             tg_msg = self.bot.edit_message_text(chat_id=old_msg_id[0],
@@ -392,6 +406,7 @@ class SlaveMessageProcessor(LocaleMixin):
                            thread_id: Optional[TelegramTopicID], msg_template: str, reactions: str,
                            old_msg_id: OldMsgID = None,
                            target_msg_id: Optional[TelegramMessageID] = None,
+                           target_quote_text: Optional[str] = None,
                            reply_markup: Optional[ReplyMarkup] = None,
                            silent: bool = False) -> telegram.Message:
         self.bot.send_chat_action(tg_dest, ChatAction.TYPING, message_thread_id=thread_id)
@@ -419,10 +434,10 @@ class SlaveMessageProcessor(LocaleMixin):
                                          text=text,
                                          prefix=text_prefix, suffix=reactions,
                                          parse_mode="HTML",
-                                         reply_to_message_id=target_msg_id,
                                          message_thread_id=thread_id,
                                          reply_markup=reply_markup,
-                                         disable_notification=silent)
+                                         disable_notification=silent,
+                                         **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
 
     # Parameters to decide when to pictures as files
     IMG_MIN_SIZE = 1600
@@ -438,6 +453,7 @@ class SlaveMessageProcessor(LocaleMixin):
                             thread_id: Optional[TelegramTopicID], msg_template: str, reactions: str,
                             old_msg_id: OldMsgID = None,
                             target_msg_id: Optional[TelegramMessageID] = None,
+                            target_quote_text: Optional[str] = None,
                             reply_markup: Optional[ReplyMarkup] = None,
                             silent: bool = False) -> telegram.Message:
         assert msg.file
@@ -497,10 +513,11 @@ class SlaveMessageProcessor(LocaleMixin):
                         edit_media = False
                     self.bot.send_message(chat_id=old_msg_id[0], reply_to_message_id=old_msg_id[1], text=file_too_large)
                 else:
-                    message = self.bot.send_message(chat_id=tg_dest, reply_to_message_id=target_msg_id,
+                    message = self.bot.send_message(chat_id=tg_dest,
                                                     message_thread_id=thread_id, text=text,
                                                     parse_mode="HTML", reply_markup=reply_markup, disable_notification=silent,
-                                                    prefix=text_prefix, suffix=reactions)
+                                                    prefix=text_prefix, suffix=reactions,
+                                                    **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
                     message.reply_text(file_too_large)
                     return message
 
@@ -534,20 +551,20 @@ class SlaveMessageProcessor(LocaleMixin):
                 file = self.process_file_obj(msg.file, msg.path)
                 return self.bot.send_document(tg_dest, file, prefix=text_prefix, suffix=reactions,
                                               caption=text, parse_mode="HTML", filename=msg.filename,
-                                              reply_to_message_id=target_msg_id,
                                               message_thread_id=thread_id,
                                               reply_markup=reply_markup,
-                                              disable_notification=silent)
+                                              disable_notification=silent,
+                                              **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
             else:
                 try:
                     assert msg.path
                     file = self.process_file_obj(msg.file, msg.path)
                     return self.bot.send_photo(tg_dest, file, prefix=text_prefix, suffix=reactions,
                                                caption=text, parse_mode="HTML",
-                                               reply_to_message_id=target_msg_id,
                                                message_thread_id=thread_id,
                                                reply_markup=reply_markup,
-                                               disable_notification=silent)
+                                               disable_notification=silent,
+                                               **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
                 except telegram.error.BadRequest as e:
                     self.logger.error('[%s] Failed to send it as image, sending as document. Reason: %s',
                                       msg.uid, e)
@@ -556,10 +573,10 @@ class SlaveMessageProcessor(LocaleMixin):
                     file = self.process_file_obj(msg.file, msg.path)
                     return self.bot.send_document(tg_dest, file, prefix=text_prefix, suffix=reactions,
                                                   caption=text, parse_mode="HTML", filename=msg.filename,
-                                                  reply_to_message_id=target_msg_id,
                                                   message_thread_id=thread_id,
                                                   reply_markup=reply_markup,
-                                                  disable_notification=silent)
+                                                  disable_notification=silent,
+                                                  **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
         finally:
             if msg.file:
                 msg.file.close()
@@ -568,6 +585,7 @@ class SlaveMessageProcessor(LocaleMixin):
                                 thread_id: Optional[TelegramTopicID], msg_template: str, reactions: str,
                                 old_msg_id: OldMsgID = None,
                                 target_msg_id: Optional[TelegramMessageID] = None,
+                                target_quote_text: Optional[str] = None,
                                 reply_markup: Optional[ReplyMarkup] = None,
                                 silent: bool = None) -> telegram.Message:
         self.bot.send_chat_action(tg_dest, ChatAction.UPLOAD_PHOTO, message_thread_id=thread_id) # UPLOAD_VIDEO_NOTE might be better?
@@ -591,11 +609,12 @@ class SlaveMessageProcessor(LocaleMixin):
                         edit_media = False
                     self.bot.send_message(chat_id=old_msg_id[0], reply_to_message_id=old_msg_id[1], text=file_too_large)
                 else:
-                    message = self.bot.send_message(chat_id=tg_dest, reply_to_message_id=target_msg_id,
+                    message = self.bot.send_message(chat_id=tg_dest,
                                                     message_thread_id=thread_id, text=text,
                                                     parse_mode="HTML", reply_markup=reply_markup,
                                                     disable_notification=silent,
-                                                    prefix=text_prefix, suffix=reactions)
+                                                    prefix=text_prefix, suffix=reactions,
+                                                    **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
                     message.reply_text(file_too_large)
                     return message
 
@@ -616,10 +635,10 @@ class SlaveMessageProcessor(LocaleMixin):
                 return self.bot.send_animation(tg_dest, InputFile(file_, filename=msg.filename),
                                                prefix=text_prefix, suffix=reactions,
                                                caption=text, parse_mode="HTML",
-                                               reply_to_message_id=target_msg_id,
                                                message_thread_id=thread_id,
                                                reply_markup=reply_markup,
-                                               disable_notification=silent)
+                                               disable_notification=silent,
+                                               **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
         finally:
             if msg.file is not None:
                 msg.file.close()
@@ -628,6 +647,7 @@ class SlaveMessageProcessor(LocaleMixin):
                               thread_id: Optional[TelegramTopicID], msg_template: str, reactions: str,
                               old_msg_id: OldMsgID = None,
                               target_msg_id: Optional[TelegramMessageID] = None,
+                              target_quote_text: Optional[str] = None,
                               reply_markup: Optional[InlineKeyboardMarkup] = None,
                               silent: bool = False) -> telegram.Message:
 
@@ -671,12 +691,13 @@ class SlaveMessageProcessor(LocaleMixin):
                                               text=file_too_large)
                     else:
                         # Send placeholder text first
-                        message = self.bot.send_message(chat_id=tg_dest, reply_to_message_id=target_msg_id,
+                        message = self.bot.send_message(chat_id=tg_dest,
                                                         message_thread_id=thread_id,
                                                         text=self.html_substitutions(msg),
                                                         parse_mode="HTML", reply_markup=reply_markup,
                                                         disable_notification=silent,
-                                                        prefix=text_prefix, suffix=reactions)
+                                                        prefix=text_prefix, suffix=reactions,
+                                                        **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
                         message.reply_text(file_too_large)
                         return message
 
@@ -688,8 +709,8 @@ class SlaveMessageProcessor(LocaleMixin):
                     file = self.process_file_obj(webp_img, webp_img.name)
                     return self.bot.send_sticker(tg_dest, file, reply_markup=sticker_reply_markup,
                                                  message_thread_id=thread_id,
-                                                 reply_to_message_id=target_msg_id,
-                                                 disable_notification=silent)
+                                                 disable_notification=silent,
+                                                 **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
                 except IOError:
                     self.logger.warning("[%s] Failed to convert image to webp sticker, sending as document.", msg.uid)
                     assert msg.file and msg.path
@@ -697,9 +718,9 @@ class SlaveMessageProcessor(LocaleMixin):
                     return self.bot.send_document(tg_dest, file, prefix=text_prefix, suffix=reactions,
                                                   message_thread_id=thread_id,
                                                   caption=msg.text, filename=msg.filename,
-                                                  reply_to_message_id=target_msg_id,
                                                   reply_markup=reply_markup,
-                                                  disable_notification=silent)
+                                                  disable_notification=silent,
+                                                  **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
                 finally:
                     if webp_img and not webp_img.closed:
                         webp_img.close()
@@ -731,6 +752,7 @@ class SlaveMessageProcessor(LocaleMixin):
                            thread_id: Optional[TelegramTopicID], msg_template: str, reactions: str,
                            old_msg_id: OldMsgID = None,
                            target_msg_id: Optional[TelegramMessageID] = None,
+                           target_quote_text: Optional[str] = None,
                            reply_markup: Optional[ReplyMarkup] = None,
                            silent: bool = False) -> telegram.Message:
         self.bot.send_chat_action(tg_dest, ChatAction.UPLOAD_DOCUMENT, message_thread_id=thread_id)
@@ -769,11 +791,12 @@ class SlaveMessageProcessor(LocaleMixin):
                         edit_media = False
                     self.bot.send_message(chat_id=old_msg_id[0], reply_to_message_id=old_msg_id[1], text=file_too_large)
                 else:
-                    message = self.bot.send_message(chat_id=tg_dest, reply_to_message_id=target_msg_id,
+                    message = self.bot.send_message(chat_id=tg_dest,
                                                     message_thread_id=thread_id, text=text,
                                                     parse_mode="HTML", reply_markup=reply_markup,
                                                     disable_notification=silent,
-                                                    prefix=text_prefix, suffix=reactions)
+                                                    prefix=text_prefix, suffix=reactions,
+                                                    **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
                     message.reply_text(file_too_large)
                     return message
 
@@ -792,10 +815,10 @@ class SlaveMessageProcessor(LocaleMixin):
             return self.bot.send_document(tg_dest, file,
                                           prefix=text_prefix, suffix=reactions,
                                           caption=text, parse_mode="HTML", filename=file_name,
-                                          reply_to_message_id=target_msg_id,
                                           message_thread_id=thread_id,
                                           reply_markup=reply_markup,
-                                          disable_notification=silent)
+                                          disable_notification=silent,
+                                          **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
         finally:
             if msg.file is not None:
                 msg.file.close()
@@ -804,6 +827,7 @@ class SlaveMessageProcessor(LocaleMixin):
                             thread_id: Optional[TelegramTopicID], msg_template: str, reactions: str,
                             old_msg_id: OldMsgID = None,
                             target_msg_id: Optional[TelegramMessageID] = None,
+                            target_quote_text: Optional[str] = None,
                             reply_markup: Optional[ReplyMarkup] = None,
                             silent: bool = False) -> telegram.Message:
         self.bot.send_chat_action(tg_dest, ChatAction.RECORD_AUDIO, message_thread_id=thread_id)
@@ -822,11 +846,12 @@ class SlaveMessageProcessor(LocaleMixin):
                         edit_media = False
                     self.bot.send_message(chat_id=old_msg_id[0], reply_to_message_id=old_msg_id[1], text=file_too_large)
                 else:
-                    message = self.bot.send_message(chat_id=tg_dest, reply_to_message_id=target_msg_id,
+                    message = self.bot.send_message(chat_id=tg_dest,
                                                     message_thread_id=thread_id, text=text,
                                                     parse_mode="HTML", reply_markup=reply_markup,
                                                     disable_notification=silent,
-                                                    prefix=text_prefix, suffix=reactions)
+                                                    prefix=text_prefix, suffix=reactions,
+                                                    **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
                     message.reply_text(file_too_large)
                     return message
 
@@ -860,9 +885,10 @@ class SlaveMessageProcessor(LocaleMixin):
                 file = self.process_file_obj(f, f.name)
                 tg_msg = self.bot.send_voice(tg_dest, file, prefix=text_prefix, suffix=reactions,
                                              caption=text, parse_mode="HTML",
-                                             reply_to_message_id=target_msg_id, reply_markup=reply_markup,
+                                             reply_markup=reply_markup,
                                              message_thread_id=thread_id,
-                                             disable_notification=silent)
+                                             disable_notification=silent,
+                                             **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
             return tg_msg
         finally:
             if msg.file is not None:
@@ -872,6 +898,7 @@ class SlaveMessageProcessor(LocaleMixin):
                                thread_id: Optional[TelegramTopicID], msg_template: str, reactions: str,
                                old_msg_id: OldMsgID = None,
                                target_msg_id: Optional[TelegramMessageID] = None,
+                               target_quote_text: Optional[str] = None,
                                reply_markup: Optional[InlineKeyboardMarkup] = None,
                                silent: bool = False) -> telegram.Message:
         # Location messages cannot be edited in content by bots.
@@ -904,15 +931,17 @@ class SlaveMessageProcessor(LocaleMixin):
 
         # TODO: Use live location if possible? Lift live location messages to EFB Framework?
         return self.bot.send_location(tg_dest, latitude=attributes.latitude,
-                                      longitude=attributes.longitude, reply_to_message_id=target_msg_id,
+                                      longitude=attributes.longitude,
                                       message_thread_id=thread_id,
                                       reply_markup=location_reply_markup,
-                                      disable_notification=silent)
+                                      disable_notification=silent,
+                                      **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
 
     def slave_message_video(self, msg: Message, tg_dest: TelegramChatID,
                             thread_id: Optional[TelegramTopicID], msg_template: str, reactions: str,
                             old_msg_id: OldMsgID = None,
                             target_msg_id: Optional[TelegramMessageID] = None,
+                            target_quote_text: Optional[str] = None,
                             reply_markup: Optional[ReplyMarkup] = None,
                             silent: bool = False) -> telegram.Message:
         self.bot.send_chat_action(tg_dest, ChatAction.UPLOAD_VIDEO, message_thread_id=thread_id)
@@ -938,11 +967,12 @@ class SlaveMessageProcessor(LocaleMixin):
                         edit_media = False
                     self.bot.send_message(chat_id=old_msg_id[0], reply_to_message_id=old_msg_id[1], text=file_too_large)
                 else:
-                    message = self.bot.send_message(chat_id=tg_dest, reply_to_message_id=target_msg_id,
+                    message = self.bot.send_message(chat_id=tg_dest,
                                                     message_thread_id=thread_id, text=text,
                                                     parse_mode="HTML", reply_markup=reply_markup,
                                                     disable_notification=silent,
-                                                    prefix=text_prefix, suffix=reactions)
+                                                    prefix=text_prefix, suffix=reactions,
+                                                    **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
                     message.reply_text(file_too_large)
                     return message
 
@@ -958,10 +988,10 @@ class SlaveMessageProcessor(LocaleMixin):
             file = self.process_file_obj(msg.file, msg.path)
             return self.bot.send_video(tg_dest, file, prefix=text_prefix, suffix=reactions,
                                        caption=text, parse_mode="HTML",
-                                       reply_to_message_id=target_msg_id,
                                        message_thread_id=thread_id,
                                        reply_markup=reply_markup,
-                                       disable_notification=silent)
+                                       disable_notification=silent,
+                                       **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
         finally:
             if msg.file is not None:
                 msg.file.close()
@@ -970,6 +1000,7 @@ class SlaveMessageProcessor(LocaleMixin):
                                   thread_id: Optional[TelegramTopicID], msg_template: str, reactions: str,
                                   old_msg_id: OldMsgID = None,
                                   target_msg_id: Optional[TelegramMessageID] = None,
+                                  target_quote_text: Optional[str] = None,
                                   reply_markup: Optional[ReplyMarkup] = None,
                                   silent: bool = False) -> telegram.Message:
         self.logger.debug("[%s] Sending as an unsupported message.", msg.uid)
@@ -989,8 +1020,9 @@ class SlaveMessageProcessor(LocaleMixin):
                                            text=text, parse_mode="HTML",
                                            prefix=unsupported_prefix,
                                            suffix=reactions,
-                                           reply_to_message_id=target_msg_id, message_thread_id=thread_id, reply_markup=reply_markup,
-                                           disable_notification=silent)
+                                           message_thread_id=thread_id, reply_markup=reply_markup,
+                                           disable_notification=silent,
+                                           **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
         else:
             # Cannot change reply_to_message_id or thread_id when editing a message
             tg_msg = self.bot.edit_message_text(chat_id=old_msg_id[0],
@@ -1094,6 +1126,31 @@ class SlaveMessageProcessor(LocaleMixin):
 
         # Go through the ordinary update process
         self.dispatch_message(msg=old_msg, msg_template=msg_template, old_msg_id=(chat_id, msg_id), tg_dest=chat_id)
+
+    @staticmethod
+    def normalize_reply_quote_text(text: Optional[str]) -> Optional[str]:
+        if not text:
+            return None
+        quote = text.strip()
+        if not quote:
+            return None
+        return quote[:1024]
+
+    def build_reply_target_kwargs(self, target_msg_id: Optional[TelegramMessageID],
+                                  target_quote_text: Optional[str] = None) -> dict:
+        if not target_msg_id:
+            return {}
+        quote = self.normalize_reply_quote_text(target_quote_text)
+        if quote:
+            return {
+                "api_kwargs": {
+                    "reply_parameters": {
+                        "message_id": target_msg_id,
+                        "quote": quote
+                    }
+                }
+            }
+        return {"reply_to_message_id": target_msg_id}
 
     def resolve_author_format(self) -> str:
         author_format = self.flag("author_format")
