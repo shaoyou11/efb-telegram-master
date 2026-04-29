@@ -129,6 +129,17 @@ class TelegramBotManager(LocaleMixin):
             return caption_affix
 
         @classmethod
+        def inject_show_caption_above_media(cls, fn: Callable):
+            @wraps(fn)
+            def wrap(self: 'TelegramBotManager', *args, **kwargs):
+                if "caption" in kwargs or "caption_entities" in kwargs:
+                    api_kwargs = kwargs.get("api_kwargs") or {}
+                    api_kwargs["show_caption_above_media"] = True
+                    kwargs["api_kwargs"] = api_kwargs
+                return fn(self, *args, **kwargs)
+            return wrap
+
+        @classmethod
         def retry_on_topic_closed(cls, fn: Callable):
             @wraps(fn)
             def wrap(self: 'TelegramBotManager', *args, **kwargs):
@@ -342,6 +353,7 @@ class TelegramBotManager(LocaleMixin):
 
     @Decorators.retry_on_timeout
     @Decorators.caption_affix_decorator
+    @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
     def send_audio(self, *args, **kwargs):
@@ -367,6 +379,7 @@ class TelegramBotManager(LocaleMixin):
 
     @Decorators.retry_on_timeout
     @Decorators.caption_affix_decorator
+    @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
     def send_voice(self, *args, **kwargs):
@@ -392,6 +405,7 @@ class TelegramBotManager(LocaleMixin):
 
     @Decorators.retry_on_timeout
     @Decorators.caption_affix_decorator
+    @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
     def send_video(self, *args, **kwargs):
@@ -417,6 +431,7 @@ class TelegramBotManager(LocaleMixin):
 
     @Decorators.retry_on_timeout
     @Decorators.caption_affix_decorator
+    @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
     def send_document(self, *args, **kwargs):
@@ -437,6 +452,7 @@ class TelegramBotManager(LocaleMixin):
 
     @Decorators.retry_on_timeout
     @Decorators.caption_affix_decorator
+    @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
     def send_animation(self, *args, **kwargs):
@@ -457,6 +473,7 @@ class TelegramBotManager(LocaleMixin):
 
     @Decorators.retry_on_timeout
     @Decorators.caption_affix_decorator
+    @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
     def send_photo(self, *args, **kwargs):
@@ -484,7 +501,9 @@ class TelegramBotManager(LocaleMixin):
     def send_chat_action(self, *args, **kwargs):
         message_thread_id = kwargs.pop('message_thread_id', None)
         if message_thread_id != None:
-            kwargs['api_kwargs'] = { "message_thread_id":  message_thread_id}
+            api_kwargs = kwargs.get('api_kwargs') or {}
+            api_kwargs["message_thread_id"] = message_thread_id
+            kwargs['api_kwargs'] = api_kwargs
         return self.updater.bot.send_chat_action(*args, **kwargs)
 
     @Decorators.retry_on_timeout
@@ -529,6 +548,7 @@ class TelegramBotManager(LocaleMixin):
 
     @Decorators.retry_on_timeout
     @Decorators.caption_affix_decorator
+    @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
     def edit_message_caption(self, *args, **kwargs):
@@ -536,6 +556,7 @@ class TelegramBotManager(LocaleMixin):
 
     @Decorators.retry_on_timeout
     @Decorators.caption_affix_decorator
+    @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
     def edit_message_media(self, *args, **kwargs):
