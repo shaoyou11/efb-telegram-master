@@ -1,0 +1,77 @@
+[project]
+name = "efb-telegram-master"
+version = "2.3.1"
+description = "Telegram Master Channel for EH Forwarder Bot, based on Telegram Bot API."
+authors = [
+    {name = "jiz4oh", email = "git@jiz4oh.com"},
+    {name = "Eana Hufwe", email = "ilove@1a23.com"},
+]
+dependencies = [
+    "setuptools>=82.0.1",
+    "bullet>=2.2.0",
+    "cjkwrap",
+    "ehforwarderbot>=2.0.0",
+    "ffmpeg-python",
+    "humanize",
+    "language-tags",
+    "peewee",
+    "pillow",
+    "pydub",
+    "python-magic",
+    "python-telegram-bot~=13.15",
+    "requests",
+    "retrying",
+    "ruamel.yaml",
+    "typing-extensions>=3.7.4.1",
+]
+requires-python = ">=3.6"
+readme = "README.rst"
+license = {text = "AGPLv3+"}
+keywords = ["ehforwarderbot", "EH Forwarder Bot", "EH Forwarder Bot Master Channel", "Telegram", "Telegram Bot", "chatbot"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Topic :: Communications :: Chat",
+    "Topic :: Utilities",
+]
+
+
+[project.urls]
+Homepage = "https://etm.1a23.studio"
+
+[project.optional-dependencies]
+tests = [
+    "PySocks",
+    "coverage",
+    "cryptg",
+    "doit",
+    "flaky",
+    "mypy>=0.910",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-dotenv",
+    "pytest-html",
+    "sphinx",
+    "telethon",
+]
+tgs = [
+    "cairosvg",
+    "lottie",
+]
+
+[project.entry-points."ehforwarderbot.master"]
+"blueset.telegram" = "efb_telegram_master:TelegramChannel"
+
+[project.entry-points."ehforwarderbot.wizard"]
+"blueset.telegram" = "efb_telegram_master.wizard:wizard"
+[tool.pdm]
+distribution = false
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
