@@ -234,11 +234,16 @@ class SlaveMessageProcessor(LocaleMixin):
                                                     target_msg_id, reply_markup, silent)
         else:
             self.bot.send_chat_action(tg_dest, ChatAction.TYPING, message_thread_id=thread_id)
-            tg_msg = self.bot.send_message(tg_dest, prefix=msg_template, suffix=reactions,
-                                           disable_notification=silent,
-                                           message_thread_id=thread_id,
-                                           text=self._('Unknown type of message "{0}". (UT01)')
-                                           .format(msg.type.name))
+            tg_msg = self.bot.send_message(
+                tg_dest,
+                prefix=self.format_text_message_template(msg_template, msg.author),
+                suffix=reactions,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+                message_thread_id=thread_id,
+                disable_notification=silent,
+                text=self._('Unknown type of message "{0}". (UT01)').format(msg.type.name)
+            )
 
         if tg_msg and commands:
             self.channel.commands.register_command(tg_msg, ETMCommandMsgStorage(
@@ -362,10 +367,11 @@ class SlaveMessageProcessor(LocaleMixin):
         self.bot.send_chat_action(tg_dest, ChatAction.TYPING, message_thread_id=thread_id)
 
         text = self.html_substitutions(msg)
+        text_prefix = self.format_text_message_template(msg_template, msg.author)
 
         if not old_msg_id:
             tg_msg = self.bot.send_message(tg_dest,
-                                           text=text, prefix=msg_template, suffix=reactions,
+                                           text=text, prefix=text_prefix, suffix=reactions,
                                            parse_mode='HTML',
                                            reply_to_message_id=target_msg_id,
                                            message_thread_id=thread_id,
@@ -375,7 +381,7 @@ class SlaveMessageProcessor(LocaleMixin):
             # Cannot change reply_to_message_id when editing a message
             tg_msg = self.bot.edit_message_text(chat_id=old_msg_id[0],
                                                 message_id=old_msg_id[1],
-                                                text=text, prefix=msg_template, suffix=reactions,
+                                                text=text, prefix=text_prefix, suffix=reactions,
                                                 parse_mode='HTML',
                                                 reply_markup=reply_markup)
 
@@ -389,6 +395,7 @@ class SlaveMessageProcessor(LocaleMixin):
                            reply_markup: Optional[ReplyMarkup] = None,
                            silent: bool = False) -> telegram.Message:
         self.bot.send_chat_action(tg_dest, ChatAction.TYPING, message_thread_id=thread_id)
+        text_prefix = self.format_text_message_template(msg_template, msg.author)
 
         assert isinstance(msg.attributes, LinkAttribute)
         attributes: LinkAttribute = msg.attributes
@@ -405,12 +412,12 @@ class SlaveMessageProcessor(LocaleMixin):
             text += "\n\n" + self.html_substitutions(msg)
         if old_msg_id:
             return self.bot.edit_message_text(text=text, chat_id=old_msg_id[0], message_id=old_msg_id[1],
-                                              prefix=msg_template, suffix=reactions, parse_mode='HTML',
+                                              prefix=text_prefix, suffix=reactions, parse_mode='HTML',
                                               reply_markup=reply_markup)
         else:
             return self.bot.send_message(chat_id=tg_dest,
                                          text=text,
-                                         prefix=msg_template, suffix=reactions,
+                                         prefix=text_prefix, suffix=reactions,
                                          parse_mode="HTML",
                                          reply_to_message_id=target_msg_id,
                                          message_thread_id=thread_id,
@@ -451,6 +458,7 @@ class SlaveMessageProcessor(LocaleMixin):
                 text = ""
         else:
             text = ""
+        text_prefix = self.format_text_message_template(msg_template, msg.author)
         try:
             # Avoid Telegram compression of pictures by sending high definition image messages as files
             # Code adopted from wolfsilver's fork:
@@ -492,7 +500,7 @@ class SlaveMessageProcessor(LocaleMixin):
                     message = self.bot.send_message(chat_id=tg_dest, reply_to_message_id=target_msg_id,
                                                     message_thread_id=thread_id, text=text,
                                                     parse_mode="HTML", reply_markup=reply_markup, disable_notification=silent,
-                                                    prefix=msg_template, suffix=reactions)
+                                                    prefix=text_prefix, suffix=reactions)
                     message.reply_text(file_too_large)
                     return message
 
@@ -507,10 +515,10 @@ class SlaveMessageProcessor(LocaleMixin):
                         else:
                             media = InputMediaPhoto(file, filename=msg.filename)
                         return self.bot.edit_message_media(chat_id=old_msg_id[0], message_id=old_msg_id[1], media=media, reply_markup=reply_markup,
-                                                         prefix=msg_template, suffix=reactions, caption=text, parse_mode="HTML")
+                                                         prefix=text_prefix, suffix=reactions, caption=text, parse_mode="HTML")
                     return self.bot.edit_message_caption(chat_id=old_msg_id[0], message_id=old_msg_id[1],
                                                          reply_markup=reply_markup,
-                                                         prefix=msg_template, suffix=reactions, caption=text, parse_mode="HTML")
+                                                         prefix=text_prefix, suffix=reactions, caption=text, parse_mode="HTML")
                 except telegram.error.BadRequest as e:
                     self.logger.warning("[%s] Failed to edit media/caption (BadRequest: %s). Sending new message instead.", msg.uid, e)
                     # Send as a reply if cannot edit previous message.
@@ -524,7 +532,7 @@ class SlaveMessageProcessor(LocaleMixin):
             if send_as_file:
                 assert msg.path
                 file = self.process_file_obj(msg.file, msg.path)
-                return self.bot.send_document(tg_dest, file, prefix=msg_template, suffix=reactions,
+                return self.bot.send_document(tg_dest, file, prefix=text_prefix, suffix=reactions,
                                               caption=text, parse_mode="HTML", filename=msg.filename,
                                               reply_to_message_id=target_msg_id,
                                               message_thread_id=thread_id,
@@ -534,7 +542,7 @@ class SlaveMessageProcessor(LocaleMixin):
                 try:
                     assert msg.path
                     file = self.process_file_obj(msg.file, msg.path)
-                    return self.bot.send_photo(tg_dest, file, prefix=msg_template, suffix=reactions,
+                    return self.bot.send_photo(tg_dest, file, prefix=text_prefix, suffix=reactions,
                                                caption=text, parse_mode="HTML",
                                                reply_to_message_id=target_msg_id,
                                                message_thread_id=thread_id,
@@ -546,7 +554,7 @@ class SlaveMessageProcessor(LocaleMixin):
                     assert msg.path
                     msg.file.seek(0) # Rewind file pointer
                     file = self.process_file_obj(msg.file, msg.path)
-                    return self.bot.send_document(tg_dest, file, prefix=msg_template, suffix=reactions,
+                    return self.bot.send_document(tg_dest, file, prefix=text_prefix, suffix=reactions,
                                                   caption=text, parse_mode="HTML", filename=msg.filename,
                                                   reply_to_message_id=target_msg_id,
                                                   message_thread_id=thread_id,
@@ -572,6 +580,7 @@ class SlaveMessageProcessor(LocaleMixin):
             text = self.html_substitutions(msg)
         else:
             text = ""
+        text_prefix = self.format_text_message_template(msg_template, msg.author)
 
         try:
             file_too_large = self.check_file_size(msg.file)
@@ -586,7 +595,7 @@ class SlaveMessageProcessor(LocaleMixin):
                                                     message_thread_id=thread_id, text=text,
                                                     parse_mode="HTML", reply_markup=reply_markup,
                                                     disable_notification=silent,
-                                                    prefix=msg_template, suffix=reactions)
+                                                    prefix=text_prefix, suffix=reactions)
                     message.reply_text(file_too_large)
                     return message
 
@@ -595,9 +604,9 @@ class SlaveMessageProcessor(LocaleMixin):
                     assert msg.file and msg.path
                     file = self.process_file_obj(msg.file, msg.path)
                     return self.bot.edit_message_media(chat_id=old_msg_id[0], message_id=old_msg_id[1], media=InputMediaAnimation(file, filename=msg.filename), reply_markup=reply_markup,
-                                                            prefix=msg_template, suffix=reactions, caption=text, parse_mode="HTML")
+                                                            prefix=text_prefix, suffix=reactions, caption=text, parse_mode="HTML")
                 return self.bot.edit_message_caption(chat_id=old_msg_id[0], message_id=old_msg_id[1],
-                                                     prefix=msg_template, suffix=reactions,
+                                                     prefix=text_prefix, suffix=reactions,
                                                      reply_markup=reply_markup,
                                                      caption=text, parse_mode="HTML")
             else:
@@ -605,7 +614,7 @@ class SlaveMessageProcessor(LocaleMixin):
                 file = self.process_file_obj(msg.file, msg.path)
                 file_: Union[IO[bytes], bytes] = open(utils.coerce_local_path(file), 'rb') if isinstance(file, str) else file
                 return self.bot.send_animation(tg_dest, InputFile(file_, filename=msg.filename),
-                                               prefix=msg_template, suffix=reactions,
+                                               prefix=text_prefix, suffix=reactions,
                                                caption=text, parse_mode="HTML",
                                                reply_to_message_id=target_msg_id,
                                                message_thread_id=thread_id,
@@ -625,6 +634,7 @@ class SlaveMessageProcessor(LocaleMixin):
         self.bot.send_chat_action(tg_dest, ChatAction.UPLOAD_PHOTO, message_thread_id=thread_id)
 
         sticker_reply_markup = self.build_chat_info_inline_keyboard(msg, msg_template, reactions, reply_markup)
+        text_prefix = self.format_text_message_template(msg_template, msg.author)
 
         self.logger.debug("[%s] Message is of %s type; Path: %s; MIME: %s", msg.uid, msg.type, msg.path, msg.mime)
         if msg.path:
@@ -646,7 +656,7 @@ class SlaveMessageProcessor(LocaleMixin):
                                                               reply_markup=sticker_reply_markup)
                 except TelegramError:
                     return self.bot.send_message(chat_id=old_msg_id[0], reply_to_message_id=old_msg_id[1],
-                                                 prefix=msg_template, text=msg.text, suffix=reactions,
+                                                 prefix=text_prefix, text=msg.text, suffix=reactions,
                                                  reply_markup=reply_markup,
                                                  disable_notification=silent)
 
@@ -666,7 +676,7 @@ class SlaveMessageProcessor(LocaleMixin):
                                                         text=self.html_substitutions(msg),
                                                         parse_mode="HTML", reply_markup=reply_markup,
                                                         disable_notification=silent,
-                                                        prefix=msg_template, suffix=reactions)
+                                                        prefix=text_prefix, suffix=reactions)
                         message.reply_text(file_too_large)
                         return message
 
@@ -684,7 +694,7 @@ class SlaveMessageProcessor(LocaleMixin):
                     self.logger.warning("[%s] Failed to convert image to webp sticker, sending as document.", msg.uid)
                     assert msg.file and msg.path
                     file = self.process_file_obj(msg.file, msg.path)
-                    return self.bot.send_document(tg_dest, file, prefix=msg_template, suffix=reactions,
+                    return self.bot.send_document(tg_dest, file, prefix=text_prefix, suffix=reactions,
                                                   message_thread_id=thread_id,
                                                   caption=msg.text, filename=msg.filename,
                                                   reply_to_message_id=target_msg_id,
@@ -748,6 +758,7 @@ class SlaveMessageProcessor(LocaleMixin):
                 text = ""
         else:
             text = ""
+        text_prefix = self.format_text_message_template(msg_template, msg.author)
 
         try:
             file_too_large = self.check_file_size(msg.file)
@@ -762,7 +773,7 @@ class SlaveMessageProcessor(LocaleMixin):
                                                     message_thread_id=thread_id, text=text,
                                                     parse_mode="HTML", reply_markup=reply_markup,
                                                     disable_notification=silent,
-                                                    prefix=msg_template, suffix=reactions)
+                                                    prefix=text_prefix, suffix=reactions)
                     message.reply_text(file_too_large)
                     return message
 
@@ -771,15 +782,15 @@ class SlaveMessageProcessor(LocaleMixin):
                     assert msg.file is not None and msg.path is not None
                     file = self.process_file_obj(msg.file, msg.path)
                     return self.bot.edit_message_media(chat_id=old_msg_id[0], message_id=old_msg_id[1], media=InputMediaDocument(file, filename=msg.filename), reply_markup=reply_markup,
-                                                            prefix=msg_template, suffix=reactions, caption=text, parse_mode="HTML")
+                                                            prefix=text_prefix, suffix=reactions, caption=text, parse_mode="HTML")
                 return self.bot.edit_message_caption(chat_id=old_msg_id[0], message_id=old_msg_id[1], reply_markup=reply_markup,
-                                                     prefix=msg_template, suffix=reactions, caption=text, parse_mode="HTML")
+                                                     prefix=text_prefix, suffix=reactions, caption=text, parse_mode="HTML")
             assert msg.file is not None and msg.path is not None
             self.logger.debug("[%s] Uploading file %s (%s) as %s", msg.uid,
                               msg.file.name, msg.mime, file_name)
             file = self.process_file_obj(msg.file, msg.path)
             return self.bot.send_document(tg_dest, file,
-                                          prefix=msg_template, suffix=reactions,
+                                          prefix=text_prefix, suffix=reactions,
                                           caption=text, parse_mode="HTML", filename=file_name,
                                           reply_to_message_id=target_msg_id,
                                           message_thread_id=thread_id,
@@ -800,6 +811,7 @@ class SlaveMessageProcessor(LocaleMixin):
             text = self.html_substitutions(msg)
         else:
             text = ""
+        text_prefix = self.format_text_message_template(msg_template, msg.author)
         self.logger.debug("[%s] Message is a voice file.", msg.uid)
         try:
             file_too_large = self.check_file_size(msg.file)
@@ -814,7 +826,7 @@ class SlaveMessageProcessor(LocaleMixin):
                                                     message_thread_id=thread_id, text=text,
                                                     parse_mode="HTML", reply_markup=reply_markup,
                                                     disable_notification=silent,
-                                                    prefix=msg_template, suffix=reactions)
+                                                    prefix=text_prefix, suffix=reactions)
                     message.reply_text(file_too_large)
                     return message
 
@@ -824,6 +836,7 @@ class SlaveMessageProcessor(LocaleMixin):
                     if original_message and original_message.type == MsgType.Voice:
                         # Cannot edit voice message content, send a new one instead
                         msg_template += " " + self._("[Edited]")
+                        text_prefix = self.format_text_message_template(msg_template, msg.author)
                         if str(tg_dest) == old_msg_id[0]:
                             target_msg_id = target_msg_id or old_msg_id[1]
                         old_msg_id = None
@@ -834,10 +847,10 @@ class SlaveMessageProcessor(LocaleMixin):
                                                                         parameters=['-vbr', 'on'])
                             file = self.process_file_obj(f, f.name)
                             return self.bot.edit_message_media(chat_id=old_msg_id[0], message_id=old_msg_id[1], media=InputMediaAudio(file), reply_markup=reply_markup,
-                                                                    prefix=msg_template, suffix=reactions, caption=text, parse_mode="HTML")
+                                                                    prefix=text_prefix, suffix=reactions, caption=text, parse_mode="HTML")
                 else:
                     return self.bot.edit_message_caption(chat_id=old_msg_id[0], message_id=old_msg_id[1],
-                                                         reply_markup=reply_markup, prefix=msg_template,
+                                                         reply_markup=reply_markup, prefix=text_prefix,
                                                          suffix=reactions, caption=text, parse_mode="HTML")
 
             assert msg.file is not None
@@ -845,7 +858,7 @@ class SlaveMessageProcessor(LocaleMixin):
                 pydub.AudioSegment.from_file(msg.file).export(f, format="ogg", codec="libopus",
                                                               parameters=['-vbr', 'on'])
                 file = self.process_file_obj(f, f.name)
-                tg_msg = self.bot.send_voice(tg_dest, file, prefix=msg_template, suffix=reactions,
+                tg_msg = self.bot.send_voice(tg_dest, file, prefix=text_prefix, suffix=reactions,
                                              caption=text, parse_mode="HTML",
                                              reply_to_message_id=target_msg_id, reply_markup=reply_markup,
                                              message_thread_id=thread_id,
@@ -915,6 +928,7 @@ class SlaveMessageProcessor(LocaleMixin):
                 text = ""
         else:
             text = ""
+        text_prefix = self.format_text_message_template(msg_template, msg.author)
         try:
             file_too_large = self.check_file_size(msg.file)
             edit_media = msg.edit_media
@@ -928,7 +942,7 @@ class SlaveMessageProcessor(LocaleMixin):
                                                     message_thread_id=thread_id, text=text,
                                                     parse_mode="HTML", reply_markup=reply_markup,
                                                     disable_notification=silent,
-                                                    prefix=msg_template, suffix=reactions)
+                                                    prefix=text_prefix, suffix=reactions)
                     message.reply_text(file_too_large)
                     return message
 
@@ -937,12 +951,12 @@ class SlaveMessageProcessor(LocaleMixin):
                     assert msg.file is not None and msg.path is not None
                     file = self.process_file_obj(msg.file, msg.path)
                     return self.bot.edit_message_media(chat_id=old_msg_id[0], message_id=old_msg_id[1], media=InputMediaVideo(file, filename=msg.filename), reply_markup=reply_markup,
-                                                         prefix=msg_template, suffix=reactions, caption=text, parse_mode="HTML")
+                                                         prefix=text_prefix, suffix=reactions, caption=text, parse_mode="HTML")
                 return self.bot.edit_message_caption(chat_id=old_msg_id[0], message_id=old_msg_id[1], reply_markup=reply_markup,
-                                                     prefix=msg_template, suffix=reactions, caption=text, parse_mode="HTML")
+                                                     prefix=text_prefix, suffix=reactions, caption=text, parse_mode="HTML")
             assert msg.file is not None and msg.path is not None
             file = self.process_file_obj(msg.file, msg.path)
-            return self.bot.send_video(tg_dest, file, prefix=msg_template, suffix=reactions,
+            return self.bot.send_video(tg_dest, file, prefix=text_prefix, suffix=reactions,
                                        caption=text, parse_mode="HTML",
                                        reply_to_message_id=target_msg_id,
                                        message_thread_id=thread_id,
@@ -965,11 +979,15 @@ class SlaveMessageProcessor(LocaleMixin):
             text = self.html_substitutions(msg)
         else:
             text = ""
+        unsupported_prefix = self.format_text_message_template(msg_template + " " + self._("(unsupported)"), msg.author)
+        unsupported_edited_prefix = self.format_text_message_template(
+            msg_template + " " + self._("(unsupported) [Edited]"), msg.author
+        )
 
         if not old_msg_id:
             tg_msg = self.bot.send_message(tg_dest,
                                            text=text, parse_mode="HTML",
-                                           prefix=msg_template + " " + self._("(unsupported)"),
+                                           prefix=unsupported_prefix,
                                            suffix=reactions,
                                            reply_to_message_id=target_msg_id, message_thread_id=thread_id, reply_markup=reply_markup,
                                            disable_notification=silent)
@@ -978,7 +996,7 @@ class SlaveMessageProcessor(LocaleMixin):
             tg_msg = self.bot.edit_message_text(chat_id=old_msg_id[0],
                                                 message_id=old_msg_id[1],
                                                 text=text, parse_mode="HTML",
-                                                prefix=msg_template + " " + self._("(unsupported) [Edited]"), # Mark as edited
+                                                prefix=unsupported_edited_prefix,
                                                 suffix=reactions,
                                                 reply_markup=reply_markup)
 
@@ -1076,6 +1094,39 @@ class SlaveMessageProcessor(LocaleMixin):
 
         # Go through the ordinary update process
         self.dispatch_message(msg=old_msg, msg_template=msg_template, old_msg_id=(chat_id, msg_id), tg_dest=chat_id)
+
+    def resolve_author_format(self) -> str:
+        author_format = self.flag("author_format")
+        if author_format in ("bold", "blockquote"):
+            return author_format
+        return "bold"
+
+    @staticmethod
+    def build_author_template_html(author: Chat, fallback_text: str) -> str:
+        alias = getattr(author, "alias", None)
+        name = getattr(author, "name", None)
+        alias = alias if isinstance(alias, str) else ""
+        name = name if isinstance(name, str) else ""
+        if alias and name:
+            needle = f"{alias} ({name})"
+            if needle in fallback_text:
+                before, _, after = fallback_text.partition(needle)
+                return (
+                    html.escape(before)
+                    + f"{html.escape(alias)} (<tg-spoiler>{html.escape(name)}</tg-spoiler>)"
+                    + html.escape(after)
+                )
+        return html.escape(fallback_text)
+
+    def format_text_message_template(self, msg_template: str, author: Optional[Chat] = None) -> str:
+        if not msg_template:
+            return ""
+        author_text = html.escape(msg_template)
+        if author:
+            author_text = self.build_author_template_html(author, msg_template)
+        if self.resolve_author_format() == "blockquote":
+            return f"<blockquote>{author_text}</blockquote>"
+        return f"<b>{author_text}</b>"
 
     def generate_message_template(self, msg: Message, singly_linked: bool) -> str:
         msg_prefix = ""  # For group member name

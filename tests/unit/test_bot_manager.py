@@ -4,6 +4,7 @@ from typing import IO, Iterator, BinaryIO
 from unittest.mock import patch
 
 import pytest
+from telegram import InputMediaDocument
 
 
 def test_text_prefix_suffix(channel, bot_admin):
@@ -105,3 +106,27 @@ def test_malformed_html_caption(channel, bot_admin, image):
         caption='<b>Bold and <i>italics</i> text</b> and <abbr title="unknown tag to Telegram">UTTT</abbr> and an <a href="https://example.com">incomplete link</a',
         parse_mode="html"
     )
+
+
+def test_edit_message_media_sets_and_clears_parse_mode(channel, bot_admin):
+    media = InputMediaDocument("file_id")
+    with patch("telegram.Bot.edit_message_media") as mock_edit:
+        channel.bot_manager.edit_message_media(
+            chat_id=bot_admin,
+            message_id=1,
+            media=media,
+            caption="<b>Alice:</b>",
+            parse_mode="HTML",
+        )
+        sent_media = mock_edit.call_args.kwargs["media"]
+        assert sent_media.caption == "<b>Alice:</b>"
+        assert sent_media.parse_mode == "HTML"
+
+        channel.bot_manager.edit_message_media(
+            chat_id=bot_admin,
+            message_id=1,
+            media=media,
+            caption="Alice:",
+        )
+        retried_media = mock_edit.call_args.kwargs["media"]
+        assert retried_media.parse_mode is None

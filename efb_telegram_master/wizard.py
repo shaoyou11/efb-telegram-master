@@ -482,6 +482,13 @@ flags_settings = {
            '- emoji: Use emoji like 🖼️, 🎥, and 📄.\n'
            '- text: Use text like “Sent a picture/video/file”.\n'
            '- disabled: Use empty placeholders.')
+         ),
+    "author_format":
+        ("bold", 'choices', ["bold", "blockquote"],
+         _('Author label style in forwarded messages.\n'
+           '\n'
+           '- bold: Render author label in bold.\n'
+           '- blockquote: Render author label as a blockquote.')
          )
 }
 

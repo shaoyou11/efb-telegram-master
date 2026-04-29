@@ -55,6 +55,7 @@ class ExperimentalFlagsManager(LocaleMixin):
         "animated_stickers": False,
         "send_to_last_chat": "warn",
         "default_media_prompt": "emoji",
+        "author_format": "bold",
         "api_base_url": None,
         "api_base_file_url": None,
         "local_tdlib_api": False,

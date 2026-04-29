@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from pytest import fixture
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -184,3 +186,24 @@ def test_build_inline_keyboard_existing_buttons(build_inline_keyboard, private):
     assert "__text__" in seq
     assert "__template__" in seq
     assert "__reactions__" in seq
+
+
+def test_format_text_message_template_with_alias_wraps_name_in_spoiler(channel):
+    processor = channel.slave_messages
+    author = SimpleNamespace(alias="Alice", name="A", long_name="Alice (A)")
+
+    result = processor.format_text_message_template("Alice (A):", author)
+
+    assert result == "<b>Alice (<tg-spoiler>A</tg-spoiler>):</b>"
+
+
+def test_format_text_message_template_blockquote(channel):
+    processor = channel.slave_messages
+    original_flag = processor.flag
+    processor.flag = lambda key: "blockquote" if key == "author_format" else original_flag(key)
+    try:
+        result = processor.format_text_message_template("Alice:", None)
+    finally:
+        processor.flag = original_flag
+
+    assert result == "<blockquote>Alice:</blockquote>"

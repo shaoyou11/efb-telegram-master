@@ -1,6 +1,5 @@
 # coding=utf-8
 import collections
-import html
 import io
 import logging
 import os
@@ -104,10 +103,6 @@ class TelegramBotManager(LocaleMixin):
 
                 prefix = (prefix and (prefix + "\n")) or prefix
                 suffix = (suffix and ("\n" + suffix)) or suffix
-
-                if str(kwargs.get('parse_mode', '')).lower() == "html":
-                    prefix = html.escape(prefix)
-                    suffix = html.escape(suffix)
 
                 if len(prefix + text + suffix) >= telegram.constants.MAX_CAPTION_LENGTH:
                     full_message = io.StringIO(prefix + text + suffix)
@@ -238,9 +233,6 @@ class TelegramBotManager(LocaleMixin):
         """
         prefix = (prefix and (prefix + "\n")) or prefix
         suffix = (suffix and ("\n" + suffix)) or suffix
-        if str(kwargs.get('parse_mode', '')).lower() == "html":
-            prefix = html.escape(prefix)
-            suffix = html.escape(suffix)
         text: str
         if args[1:]:
             text = args[1]
@@ -288,9 +280,6 @@ class TelegramBotManager(LocaleMixin):
         """
         prefix = (prefix and (prefix + "\n")) or prefix
         suffix = (suffix and ("\n" + suffix)) or suffix
-        if str(kwargs.get('parse_mode', '')).lower() == "html":
-            prefix = html.escape(prefix)
-            suffix = html.escape(suffix)
         text = kwargs.pop('text', '')
         if len(prefix + text + suffix) >= telegram.constants.MAX_MESSAGE_LENGTH:
             full_message = io.BytesIO((prefix + text + suffix).encode())
@@ -566,6 +555,8 @@ class TelegramBotManager(LocaleMixin):
         caption_entities = kwargs.pop('caption_entities', None)
         media.caption = text
         media.caption_entities = caption_entities
+        if hasattr(media, 'parse_mode'):
+            media.parse_mode = parse_mode
         return self.updater.bot.edit_message_media(media=media, *args, **kwargs)
 
     def reply_error(self, update, errmsg):
