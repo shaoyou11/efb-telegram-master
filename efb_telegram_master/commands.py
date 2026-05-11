@@ -241,19 +241,28 @@ class CommandsManager(LocaleMixin):
             return self.bot.reply_error(update, self._("Command not found in selected module. (XC02)"))
 
         # noinspection PyUnresolvedReferences
-        header = "{} {}: {}\n-------\n".format(
-                channel.channel_emoji, channel.channel_name,
-                functions[groupdict['command']].name  # type: ignore
+        raw_header = "{} {}: {}".format(
+            channel.channel_emoji,
+            channel.channel_name,
+            functions[groupdict['command']].name  # type: ignore
         )
+        if self.channel.flag("author_format") == "blockquote":
+            header = f"<blockquote>{html.escape(raw_header)}</blockquote>\n-------\n"
+            parse_mode = "HTML"
+        else:
+            header = f"<b>{html.escape(raw_header)}</b>\n-------\n"
+            parse_mode = "HTML"
+
         msg = self.bot.send_message(update.message.chat.id,
-                                    prefix=header, text=self._("Please wait..."))
+                                    prefix=header, text=self._("Please wait..."), parse_mode=parse_mode)
 
         assert update.message.text
         result = functions[ExtraCommandName(groupdict['command'])](
             " ".join(update.message.text.split(' ', 1)[1:]))
 
         self.bot.edit_message_text(prefix=header, text=result,
-                                   chat_id=update.message.chat.id, message_id=msg.message_id)
+                                   chat_id=update.message.chat.id, message_id=msg.message_id,
+                                   parse_mode=parse_mode)
 
     def _command_fallback(self, *args, __channel_id: str, __callable: str, **kwargs) -> str:
         return self._("Error: Command is not found in the channel.\n"
