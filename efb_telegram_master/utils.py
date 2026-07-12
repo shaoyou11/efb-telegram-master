@@ -55,6 +55,7 @@ class ExperimentalFlagsManager(LocaleMixin):
         "default_media_prompt": "emoji",
         "api_base_url": None,
         "api_base_file_url": None,
+        "local_bot_api": False,
         "local_tdlib_api": False,
         "topic_group": None,
     }
