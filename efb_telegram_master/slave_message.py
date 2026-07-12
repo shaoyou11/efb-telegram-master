@@ -33,6 +33,7 @@ from .chat_destination_cache import ChatDestinationCache
 from .chat_object_cache import ChatObjectCacheManager
 from .commands import ETMCommandMsgStorage
 from .constants import Emoji
+from .file_size_policy import exceeds_bot_api_limit
 from .locale_mixin import LocaleMixin
 from .message import ETMMsg
 from .msg_type import get_msg_type
@@ -1229,7 +1230,10 @@ class SlaveMessageProcessor(LocaleMixin):
         file.seek(0, 2)
         file_size = file.tell()
         file.seek(0)
-        if not self.channel.flag("local_tdlib_api") and file_size > telegram.constants.MAX_FILESIZE_UPLOAD:
+        if exceeds_bot_api_limit(
+                file_size,
+                telegram.constants.MAX_FILESIZE_UPLOAD,
+                self.channel.flag("local_bot_api")):
             size_str = humanize.naturalsize(file_size)
             max_size_str = humanize.naturalsize(telegram.constants.MAX_FILESIZE_UPLOAD)
             return self._(

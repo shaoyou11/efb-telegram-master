@@ -58,6 +58,7 @@ class ExperimentalFlagsManager(LocaleMixin):
         "author_format": "bold",
         "api_base_url": None,
         "api_base_file_url": None,
+        "local_bot_api": False,
         "local_tdlib_api": False,
         "topic_group": None,
     }

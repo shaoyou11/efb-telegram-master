@@ -21,6 +21,7 @@ from ehforwarderbot.status import MessageRemoval
 from ehforwarderbot.types import ModuleID, MessageID, ChatID
 from . import utils
 from .chat_destination_cache import ChatDestinationCache
+from .file_size_policy import exceeds_bot_api_limit
 from .locale_mixin import LocaleMixin
 from .message import ETMMsg
 from .msg_type import TGMsgType, get_msg_type
@@ -523,8 +524,10 @@ class MasterMessageProcessor(LocaleMixin):
             EFBMessageError: When file exceeds the maximum download size.
         """
         size = getattr(file_obj, "file_size", None)
-        if size and not self.channel.flag("local_tdlib_api")\
-                and size > MAX_FILESIZE_DOWNLOAD:
+        if size and exceeds_bot_api_limit(
+                size,
+                MAX_FILESIZE_DOWNLOAD,
+                self.channel.flag("local_bot_api")):
             size_str = humanize.naturalsize(size)
             max_size_str = humanize.naturalsize(MAX_FILESIZE_DOWNLOAD)
             raise EFBMessageError(
