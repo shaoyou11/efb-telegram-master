@@ -2,7 +2,7 @@
 
 import gettext
 import logging
-from pkg_resources import resource_filename
+from importlib.resources import files
 from typing import TYPE_CHECKING
 
 from language_tags import tags
@@ -53,7 +53,7 @@ class LocaleHandler(Handler):
                 locale = update.effective_user.language_code.replace('-', '_')
             self.logger.info("Updating locale to %s", locale)
             self.channel.translator = gettext.translation("efb_telegram_master",
-                                                          resource_filename('efb_telegram_master', 'locale'),
+                                                          str(files('efb_telegram_master').joinpath('locale')),
                                                           languages=[locale, 'C'],
                                                           fallback=True)
         return False

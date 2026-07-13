@@ -5,6 +5,7 @@ import logging
 import mimetypes
 import time
 from gettext import NullTranslations, translation
+from importlib.resources import files
 from typing import Optional, List, Callable
 from xmlrpc.server import SimpleXMLRPCServer
 
@@ -12,7 +13,6 @@ import telegram  # lgtm [py/import-and-import-from]
 import telegram.constants
 import telegram.error
 from PIL import Image, WebPImagePlugin
-from pkg_resources import resource_filename
 from ruamel.yaml import YAML
 from telegram import Update, Message
 from telegram.ext import CommandHandler, CallbackQueryHandler, CallbackContext, Filters
@@ -85,7 +85,7 @@ class TelegramChannel(MasterChannel):
 
     # Translator
     translator: NullTranslations = translation("efb_telegram_master",
-                                               resource_filename('efb_telegram_master', 'locale'),
+                                               str(files('efb_telegram_master').joinpath('locale')),
                                                fallback=True)
     locale: Optional[str] = None
 
@@ -133,7 +133,7 @@ class TelegramChannel(MasterChannel):
 
         if not self.flag('auto_locale'):
             self.translator = translation("efb_telegram_master",
-                                          resource_filename('efb_telegram_master', 'locale'),
+                                          str(files('efb_telegram_master').joinpath('locale')),
                                           fallback=True)
 
         # Basic message handlers

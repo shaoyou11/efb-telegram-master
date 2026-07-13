@@ -5,7 +5,7 @@ from typing import Optional
 
 from PIL import Image, WebPImagePlugin
 from bullet import YesNo, Numbers, Bullet
-from pkg_resources import resource_filename
+from importlib.resources import files
 
 import cjkwrap
 from ruamel.yaml import YAML
@@ -27,7 +27,7 @@ def print_wrapped(text):
 
 
 translator = translation("efb_telegram_master",
-                         resource_filename('efb_telegram_master', 'locale'),
+                         str(files('efb_telegram_master').joinpath('locale')),
                          fallback=True)
 
 _ = translator.gettext
