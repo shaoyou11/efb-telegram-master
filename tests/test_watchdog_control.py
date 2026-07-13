@@ -1,3 +1,6 @@
+import inspect
+
+from efb_telegram_master import TelegramChannel
 from efb_telegram_master.watchdog_control import COMMANDS, HELP_TEXT, format_status
 
 
@@ -39,3 +42,11 @@ def test_help_text_is_chinese_and_lists_all_commands():
     assert "绑定远程会话" in HELP_TEXT
     assert "微信自动恢复" in HELP_TEXT
     assert "Link a remote chat" not in HELP_TEXT
+
+
+def test_watchdog_callback_is_registered_before_session_expired_fallback():
+    source = inspect.getsource(TelegramChannel.__init__)
+
+    watchdog = source.index("self.watchdog_control = WatchdogControl(self)")
+    fallback = source.index("CallbackQueryHandler(self.bot_manager.session_expired)")
+    assert watchdog < fallback

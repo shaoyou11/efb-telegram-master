@@ -146,13 +146,12 @@ class TelegramChannel(MasterChannel):
             CommandHandler("info", self.info, filters=non_edit_filter))
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.void_callback_handler, pattern="void"))
+        self.watchdog_control = WatchdogControl(self)
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.bot_manager.session_expired))
         self.bot_manager.dispatcher.add_handler(
             CommandHandler("react", self.react, filters=non_edit_filter)
         )
-        self.watchdog_control = WatchdogControl(self)
-
         # Register master message handlers after commands to prevent commands
         # commands to be delivered as messages
         self.master_messages: MasterMessageProcessor = MasterMessageProcessor(self)
