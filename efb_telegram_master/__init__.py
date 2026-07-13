@@ -42,6 +42,7 @@ from .message import ETMMsg
 from .rpc_utils import RPCUtilities
 from .slave_message import SlaveMessageProcessor
 from .utils import ExperimentalFlagsManager, EFBChannelChatIDStr, TelegramChatID, TelegramMessageID
+from .watchdog_control import WatchdogControl
 
 
 class TelegramChannel(MasterChannel):
@@ -150,6 +151,7 @@ class TelegramChannel(MasterChannel):
         self.bot_manager.dispatcher.add_handler(
             CommandHandler("react", self.react, filters=non_edit_filter)
         )
+        self.watchdog_control = WatchdogControl(self)
 
         # Register master message handlers after commands to prevent commands
         # commands to be delivered as messages
@@ -478,6 +480,8 @@ class TelegramChannel(MasterChannel):
                      "    Only works in singly linked group where the bot is an admin.\n"
                      "/rm\n"
                      "    Remove the quoted message from its remote chat.\n"
+                     "/watchdog\n"
+                     "    Manage WeChat automatic recovery switches.\n"
                      "/help\n"
                      "    Print this command list.")
         update.message.reply_text(txt)
