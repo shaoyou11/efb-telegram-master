@@ -157,7 +157,7 @@ class CommandsManager(LocaleMixin):
         assert isinstance(update, Update)
         assert update.effective_chat
 
-        msg = self._("<i>Click the link next to the name for usage.</i>\n")
+        msg = "<i>请点击功能名称旁边的链接进行操作。</i>\n"
         for idx, i in enumerate(self.modules_list):
             if isinstance(i, Channel):
                 msg += "\n\n<b>{0} {1}".format(

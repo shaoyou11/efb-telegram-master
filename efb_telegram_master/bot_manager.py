@@ -531,7 +531,7 @@ class TelegramBotManager(LocaleMixin):
         assert update.effective_chat
         if update.callback_query:
             update.callback_query.answer()
-        self.edit_message_text(text=self._("Session expired. Please try again. (SE01)"),
+        self.edit_message_text(text="操作已过期，请重新操作。（SE01）",
                                chat_id=update.effective_chat.id,
                                message_id=update.effective_message.message_id)
 
