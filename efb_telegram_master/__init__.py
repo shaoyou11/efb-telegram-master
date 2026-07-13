@@ -42,7 +42,7 @@ from .message import ETMMsg
 from .rpc_utils import RPCUtilities
 from .slave_message import SlaveMessageProcessor
 from .utils import ExperimentalFlagsManager, EFBChannelChatIDStr, TelegramChatID, TelegramMessageID
-from .watchdog_control import WatchdogControl
+from .watchdog_control import HELP_TEXT, WatchdogControl
 
 
 class TelegramChannel(MasterChannel):
@@ -460,31 +460,7 @@ class TelegramChannel(MasterChannel):
     def help(self, update: Update, context: CallbackContext):
         assert isinstance(update, Update)
         assert isinstance(update.message, Message)
-        txt = self._("EFB Telegram Master Channel\n"
-                     "/link\n"
-                     "    Link a remote chat to an empty Telegram group.\n"
-                     "    Followed by a regular expression to filter results.\n"
-                     "/chat\n"
-                     "    Generate a chat head to start a conversation.\n"
-                     "    Followed by a regular expression to filter results.\n"
-                     "/extra\n"
-                     "    List all additional features from slave channels.\n"
-                     "/unlink_all\n"
-                     "    Unlink all remote chats in this chat.\n"
-                     "/info\n"
-                     "    Show information of the current Telegram chat.\n"
-                     "/react [emoji]\n"
-                     "    React to a message with an emoji, or show a list of members reacted.\n"
-                     "/update_info\n"
-                     "    Update info of linked Telegram group.\n"
-                     "    Only works in singly linked group where the bot is an admin.\n"
-                     "/rm\n"
-                     "    Remove the quoted message from its remote chat.\n"
-                     "/watchdog\n"
-                     "    Manage WeChat automatic recovery switches.\n"
-                     "/help\n"
-                     "    Print this command list.")
-        update.message.reply_text(txt)
+        update.message.reply_text(HELP_TEXT)
 
     def poll(self):
         """
