@@ -42,6 +42,12 @@ HELP_TEXT = """EFB Telegram 主端
 /help
     显示本命令列表。"""
 
+SETTINGS = (
+    ("master", "总开关"),
+    ("event", "全天事件恢复"),
+    ("night", "凌晨自主检测"),
+)
+
 
 def switch_text(enabled):
     return "开启" if enabled else "关闭"
@@ -57,15 +63,41 @@ def format_status(state):
     )
 
 
-def keyboard(state):
+def state_mask(state):
+    mask = 0
+    for bit, (setting, _) in enumerate(SETTINGS):
+        if state[f"{setting}_enabled"]:
+            mask |= 1 << bit
+    return mask
+
+
+def change_summary(initial_mask, state):
+    changes = []
+    for bit, (setting, label) in enumerate(SETTINGS):
+        before = bool(initial_mask & (1 << bit))
+        after = state[f"{setting}_enabled"]
+        if before != after:
+            changes.append(f"{label}：{switch_text(before)} → {switch_text(after)}")
+
+    if not changes:
+        return "微信自动恢复设置已完成\n\n本次未更改任何设置。"
+    return "微信自动恢复设置已完成\n\n本次更改：\n" + "\n".join(changes)
+
+
+def keyboard(state, initial_mask=None):
+    if initial_mask is None:
+        initial_mask = state_mask(state)
     rows = []
-    labels = (("master", "总开关"), ("event", "全天事件恢复"), ("night", "凌晨自主检测"))
-    for setting, label in labels:
+    for setting, label in SETTINGS:
         enabled = state[f"{setting}_enabled"]
         rows.append([InlineKeyboardButton(
             f"{'✅' if enabled else '⬜'} {label}",
-            callback_data=f"watchdog:{setting}:{'off' if enabled else 'on'}",
+            callback_data=f"watchdog:set:{setting}:{'off' if enabled else 'on'}:{initial_mask}",
         )])
+    rows.append([InlineKeyboardButton(
+        "完成并隐藏",
+        callback_data=f"watchdog:hide:{initial_mask}",
+    )])
     return InlineKeyboardMarkup(rows)
 
 
@@ -119,11 +151,26 @@ class WatchdogControl:
         if not self.is_admin(update):
             query.answer("无操作权限", show_alert=True)
             return
-        _, setting, action = query.data.split(":", 2)
         try:
+            parts = query.data.split(":")
+            if parts[1] == "hide":
+                state = self.get_state()
+                query.answer("面板已隐藏")
+                query.edit_message_text(change_summary(int(parts[2]), state))
+                return
+
+            if parts[1] == "set":
+                _, _, setting, action, initial_mask = parts
+                initial_mask = int(initial_mask)
+            else:
+                _, setting, action = parts
+                initial_mask = state_mask(self.get_state())
             state = self.set_state(setting, action == "on")
             query.answer("设置已保存")
-            query.edit_message_text(format_status(state), reply_markup=keyboard(state))
+            query.edit_message_text(
+                format_status(state),
+                reply_markup=keyboard(state, initial_mask),
+            )
         except Exception:
             LOGGER.exception("failed to update watchdog setting")
             query.answer("设置失败，请稍后再试", show_alert=True)
