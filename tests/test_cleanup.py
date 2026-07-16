@@ -1,34 +1,32 @@
-import json
-from unittest.mock import patch
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from efb_telegram_master.cleanup import build_cleanup_text, run_cleanup
-
-
-def test_build_cleanup_text_explains_single_file_deletion():
-    items = [{"name": "old.tmp", "category": "cache", "bytes": 2048, "token": "abc"}]
-
-    text = build_cleanup_text(items)
-
-    assert "逐个删除" in text
-    assert "old.tmp" in text
-    assert "聊天附件" in text
+from efb_telegram_master.cleanup import build_storage_text, load_storage_report
 
 
-@patch("efb_telegram_master.cleanup.subprocess.check_output")
-def test_run_cleanup_passes_only_valid_token_to_script(check_output):
-    check_output.return_value = json.dumps({"name": "old.tmp"}).encode()
+def test_build_storage_text_shows_usage_policy_and_host_paths():
+    report = {
+        "cache": {"bytes": 10 * 1024**2},
+        "sns_cache": {"bytes": 20 * 1024**2},
+        "attachments": {"bytes": 3 * 1024**3},
+        "backups": {"bytes": 2 * 1024**3},
+        "backup_count": 26,
+    }
 
-    token = "a" * 20
-    result = run_cleanup("delete", token)
+    text = build_storage_text(report, "/vol4/1000/docker/efb")
 
-    assert result["name"] == "old.tmp"
-    assert check_output.call_args.args[0][-1] == token
+    assert "普通缓存：10.00 MB" in text
+    assert "朋友圈缓存：20.00 MB" in text
+    assert "聊天附件：3.00 GB" in text
+    assert "配置备份：2.00 GB（26 份）" in text
+    assert "/vol4/1000/docker/efb/comwechat/Files/shaoyou11/FileStorage/Cache" in text
+    assert "可以删除" in text
+    assert "谨慎删除" in text
 
 
-def test_run_cleanup_rejects_unsafe_token():
-    try:
-        run_cleanup("delete", "../file")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("unsafe token was accepted")
+def test_load_storage_report_reads_json_file():
+    with TemporaryDirectory() as directory:
+        report = Path(directory) / "report.json"
+        report.write_text('{"backup_count": 3}', encoding="utf-8")
+
+        assert load_storage_report(report)["backup_count"] == 3

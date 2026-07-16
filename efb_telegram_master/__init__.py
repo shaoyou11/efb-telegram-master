@@ -3,7 +3,6 @@
 import html
 import logging
 import mimetypes
-import subprocess
 import time
 from gettext import NullTranslations, translation
 from typing import Optional, List, Callable
@@ -37,7 +36,7 @@ from .chat_binding import ChatBindingManager
 from .chat_destination_cache import ChatDestinationCache
 from .chat_object_cache import ChatObjectCacheManager
 from .commands import CommandsManager
-from .cleanup import build_cleanup_text, run_cleanup
+from .cleanup import build_storage_text, load_storage_report
 from .db import DatabaseManager
 from .master_message import MasterMessageProcessor
 from .message import ETMMsg
@@ -233,15 +232,11 @@ class TelegramChannel(MasterChannel):
         self._render_cleanup(update)
 
     def _render_cleanup(self, update: Update):
-        items = run_cleanup("list")
-        buttons = []
-        for item in items:
-            size_mb = item['bytes'] / 1024 / 1024
-            label = f"删除 {item['name']} · {size_mb:.2f} MB"
-            buttons.append([InlineKeyboardButton(label[:60], callback_data=f"cleanup:ask:{item['token']}")])
-        buttons.append([InlineKeyboardButton("刷新", callback_data="cleanup:list")])
-        markup = InlineKeyboardMarkup(buttons)
-        text = build_cleanup_text(items)
+        report = load_storage_report()
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("刷新占用", callback_data="cleanup:list"),
+        ]])
+        text = build_storage_text(report)
         if update.callback_query:
             update.callback_query.edit_message_text(text, reply_markup=markup)
         else:
@@ -257,34 +252,6 @@ class TelegramChannel(MasterChannel):
         action = parts[1] if len(parts) > 1 else ""
         if action == "list":
             query.answer()
-            self._render_cleanup(update)
-            return
-        if len(parts) != 3:
-            query.answer("无效操作", show_alert=True)
-            return
-        token = parts[2]
-        if action == "ask":
-            items = run_cleanup("list")
-            target = next((item for item in items if item['token'] == token), None)
-            if not target:
-                query.answer("文件已不存在或已过期", show_alert=True)
-                return
-            query.answer()
-            query.edit_message_text(
-                f"确认删除这个缓存文件？\n{target['name']}\n删除后无法恢复。",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("确认删除", callback_data=f"cleanup:delete:{token}"),
-                    InlineKeyboardButton("取消", callback_data="cleanup:list"),
-                ]]),
-            )
-            return
-        if action == "delete":
-            try:
-                deleted = run_cleanup("delete", token)
-            except (ValueError, OSError, subprocess.SubprocessError):
-                query.answer("删除失败或文件已变化", show_alert=True)
-                return
-            query.answer(f"已删除 {deleted['name']}")
             self._render_cleanup(update)
             return
         query.answer("无效操作", show_alert=True)
