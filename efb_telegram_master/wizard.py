@@ -311,6 +311,7 @@ def setup_telegram_bot_commands_list(data):
                 ("info", _("Display information of the current Telegram chat.")),
                 ("chat", _("Generate a chat head.")),
                 ("extra", _("Access additional features from Slave Channels.")),
+                ("cleanup", _("Safely review and delete expired cache files.")),
                 ("update_info", _("Update info of linked Telegram group.")),
                 ("react", _("Send a reaction to a message, or show a list of reactors.")),
                 ("rm", _("Remove a message from its remote chat.")),
