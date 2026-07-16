@@ -3,6 +3,7 @@
 import html
 import logging
 import mimetypes
+import subprocess
 import time
 from gettext import NullTranslations, translation
 from typing import Optional, List, Callable
@@ -14,7 +15,7 @@ import telegram.error
 from PIL import Image, WebPImagePlugin
 from pkg_resources import resource_filename
 from ruamel.yaml import YAML
-from telegram import Update, Message
+from telegram import Update, Message, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, CallbackQueryHandler, CallbackContext, Filters
 
 import ehforwarderbot  # lgtm [py/import-and-import-from]
@@ -36,6 +37,7 @@ from .chat_binding import ChatBindingManager
 from .chat_destination_cache import ChatDestinationCache
 from .chat_object_cache import ChatObjectCacheManager
 from .commands import CommandsManager
+from .cleanup import build_cleanup_text, run_cleanup
 from .db import DatabaseManager
 from .master_message import MasterMessageProcessor
 from .message import ETMMsg
@@ -144,6 +146,10 @@ class TelegramChannel(MasterChannel):
         self.bot_manager.dispatcher.add_handler(
             CommandHandler("info", self.info, filters=non_edit_filter))
         self.bot_manager.dispatcher.add_handler(
+            CommandHandler("cleanup", self.cleanup, filters=non_edit_filter))
+        self.bot_manager.dispatcher.add_handler(
+            CallbackQueryHandler(self.cleanup_callback, pattern=r"^cleanup:"))
+        self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.void_callback_handler, pattern="void"))
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.bot_manager.session_expired))
@@ -220,6 +226,68 @@ class TelegramChannel(MasterChannel):
                 update.effective_message.reply_text(msg[x:x+4095])
         else:
             update.effective_message.reply_text(msg)
+
+    def cleanup(self, update: Update, context: CallbackContext):
+        if not update.effective_user or update.effective_user.id not in self.config['admins']:
+            return
+        self._render_cleanup(update)
+
+    def _render_cleanup(self, update: Update):
+        items = run_cleanup("list")
+        buttons = []
+        for item in items:
+            size_mb = item['bytes'] / 1024 / 1024
+            label = f"删除 {item['name']} · {size_mb:.2f} MB"
+            buttons.append([InlineKeyboardButton(label[:60], callback_data=f"cleanup:ask:{item['token']}")])
+        buttons.append([InlineKeyboardButton("刷新", callback_data="cleanup:list")])
+        markup = InlineKeyboardMarkup(buttons)
+        text = build_cleanup_text(items)
+        if update.callback_query:
+            update.callback_query.edit_message_text(text, reply_markup=markup)
+        else:
+            update.effective_message.reply_text(text, reply_markup=markup)
+
+    def cleanup_callback(self, update: Update, context: CallbackContext):
+        query = update.callback_query
+        if not query or not update.effective_user or update.effective_user.id not in self.config['admins']:
+            if query:
+                query.answer("无权执行", show_alert=True)
+            return
+        parts = (query.data or "").split(":")
+        action = parts[1] if len(parts) > 1 else ""
+        if action == "list":
+            query.answer()
+            self._render_cleanup(update)
+            return
+        if len(parts) != 3:
+            query.answer("无效操作", show_alert=True)
+            return
+        token = parts[2]
+        if action == "ask":
+            items = run_cleanup("list")
+            target = next((item for item in items if item['token'] == token), None)
+            if not target:
+                query.answer("文件已不存在或已过期", show_alert=True)
+                return
+            query.answer()
+            query.edit_message_text(
+                f"确认删除这个缓存文件？\n{target['name']}\n删除后无法恢复。",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("确认删除", callback_data=f"cleanup:delete:{token}"),
+                    InlineKeyboardButton("取消", callback_data="cleanup:list"),
+                ]]),
+            )
+            return
+        if action == "delete":
+            try:
+                deleted = run_cleanup("delete", token)
+            except (ValueError, OSError, subprocess.SubprocessError):
+                query.answer("删除失败或文件已变化", show_alert=True)
+                return
+            query.answer(f"已删除 {deleted['name']}")
+            self._render_cleanup(update)
+            return
+        query.answer("无效操作", show_alert=True)
 
     def info_topic(self, update: Update):
         """Generate string for chat linking info of a topic."""
