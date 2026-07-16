@@ -36,7 +36,7 @@ from .chat_binding import ChatBindingManager
 from .chat_destination_cache import ChatDestinationCache
 from .chat_object_cache import ChatObjectCacheManager
 from .commands import CommandsManager
-from .cleanup import build_storage_text, load_storage_report
+from .cleanup import build_storage_text, load_storage_report, parse_cleanup_action
 from .db import DatabaseManager
 from .master_message import MasterMessageProcessor
 from .message import ETMMsg
@@ -235,6 +235,7 @@ class TelegramChannel(MasterChannel):
         report = load_storage_report()
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("刷新占用", callback_data="cleanup:list"),
+            InlineKeyboardButton("关闭", callback_data="cleanup:close"),
         ]])
         text = build_storage_text(report)
         if update.callback_query:
@@ -248,11 +249,14 @@ class TelegramChannel(MasterChannel):
             if query:
                 query.answer("无权执行", show_alert=True)
             return
-        parts = (query.data or "").split(":")
-        action = parts[1] if len(parts) > 1 else ""
+        action = parse_cleanup_action(query.data or "")
         if action == "list":
             query.answer()
             self._render_cleanup(update)
+            return
+        if action == "close":
+            query.answer()
+            query.message.delete()
             return
         query.answer("无效操作", show_alert=True)
 

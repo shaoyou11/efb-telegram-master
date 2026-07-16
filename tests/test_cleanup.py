@@ -1,7 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from efb_telegram_master.cleanup import build_storage_text, load_storage_report
+from efb_telegram_master.cleanup import build_storage_text, load_storage_report, parse_cleanup_action
 
 
 def test_build_storage_text_shows_usage_policy_and_host_paths():
@@ -30,3 +30,9 @@ def test_load_storage_report_reads_json_file():
         report.write_text('{"backup_count": 3}', encoding="utf-8")
 
         assert load_storage_report(report)["backup_count"] == 3
+
+
+def test_parse_cleanup_action_supports_close_button():
+    assert parse_cleanup_action("cleanup:list") == "list"
+    assert parse_cleanup_action("cleanup:close") == "close"
+    assert parse_cleanup_action("cleanup:delete:token") is None

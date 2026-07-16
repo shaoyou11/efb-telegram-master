@@ -6,6 +6,12 @@ def load_storage_report(path="/data/storage-audit-latest.json"):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def parse_cleanup_action(data):
+    if data in {"cleanup:list", "cleanup:close"}:
+        return data.split(":", 1)[1]
+    return None
+
+
 def format_size(size):
     if size >= 1024**3:
         return f"{size / 1024**3:.2f} GB"
