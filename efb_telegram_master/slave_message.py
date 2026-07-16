@@ -31,6 +31,7 @@ from ehforwarderbot.status import ChatUpdates, MemberUpdates, MessageRemoval, Me
 from . import utils
 from .chat_destination_cache import ChatDestinationCache
 from .chat_object_cache import ChatObjectCacheManager
+from .chat_title_sync import should_auto_rename
 from .commands import ETMCommandMsgStorage
 from .constants import Emoji
 from .file_size_policy import exceeds_bot_api_limit
@@ -1059,7 +1060,17 @@ class SlaveMessageProcessor(LocaleMixin):
                 self.chat_manager.delete_chat_object(status.channel.channel_id, i)
             for i in itertools.chain(status.new_chats, status.modified_chats):
                 chat = status.channel.get_chat(i)
-                self.chat_manager.update_chat_obj(chat, full_update=True)
+                etm_chat = self.chat_manager.update_chat_obj(chat, full_update=True)
+                slave_uid = utils.chat_id_to_str(chat=chat)
+                for master_uid in self.db.get_chat_assoc(slave_uid=slave_uid):
+                    _, telegram_chat_uid, _ = utils.chat_id_str_to_id(master_uid)
+                    try:
+                        telegram_chat_id = TelegramChatID(int(telegram_chat_uid))
+                        telegram_chat = self.bot.get_chat_info(telegram_chat_id)
+                        if should_auto_rename(telegram_chat.title, str(chat.uid)):
+                            self.bot.set_chat_title(telegram_chat_id, etm_chat.chat_title[:128])
+                    except (TelegramError, TypeError, ValueError) as error:
+                        self.logger.warning("Unable to synchronize Telegram chat title for %s: %s", chat.uid, error)
         elif isinstance(status, MemberUpdates):
             self.logger.debug("Received member updates from channel %s about group %s",
                               status.channel, status.chat_id)
