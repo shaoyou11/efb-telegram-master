@@ -1060,6 +1060,8 @@ class SlaveMessageProcessor(LocaleMixin):
                 self.chat_manager.delete_chat_object(status.channel.channel_id, i)
             for i in itertools.chain(status.new_chats, status.modified_chats):
                 chat = status.channel.get_chat(i)
+                previous_chat = self.chat_manager.get_chat(chat.module_id, chat.uid)
+                previous_title = previous_chat.chat_title if previous_chat else ""
                 etm_chat = self.chat_manager.update_chat_obj(chat, full_update=True)
                 slave_uid = utils.chat_id_to_str(chat=chat)
                 for master_uid in self.db.get_chat_assoc(slave_uid=slave_uid):
@@ -1071,6 +1073,20 @@ class SlaveMessageProcessor(LocaleMixin):
                             self.bot.set_chat_title(telegram_chat_id, etm_chat.chat_title[:128])
                     except (TelegramError, TypeError, ValueError) as error:
                         self.logger.warning("Unable to synchronize Telegram chat title for %s: %s", chat.uid, error)
+                if should_auto_rename(previous_title, str(chat.uid)):
+                    for topic_chat_id, thread_id in self.db.get_topic_assocs(slave_uid):
+                        try:
+                            self.bot.edit_forum_topic(
+                                chat_id=topic_chat_id,
+                                message_thread_id=thread_id,
+                                name=etm_chat.chat_title[:128],
+                                icon_custom_emoji_id="",
+                            )
+                        except TelegramError as error:
+                            if error.message != "Topic_not_modified":
+                                self.logger.warning(
+                                    "Unable to synchronize Telegram topic title for %s: %s", chat.uid, error
+                                )
         elif isinstance(status, MemberUpdates):
             self.logger.debug("Received member updates from channel %s about group %s",
                               status.channel, status.chat_id)

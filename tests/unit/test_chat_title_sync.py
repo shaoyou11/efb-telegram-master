@@ -12,6 +12,7 @@ def test_technical_wechat_title_is_safe_to_rename():
     assert MODULE.should_auto_rename("💻👤 notifymessage", "notifymessage")
     assert MODULE.should_auto_rename("💻👤 gh_366bf6794a09", "gh_366bf6794a09")
     assert MODULE.should_auto_rename("💻👤 wxid_demo", "wxid_demo")
+    assert MODULE.should_auto_rename("💻👥 20577460305@chatroom", "20577460305@chatroom")
 
 
 def test_user_customized_title_is_preserved():

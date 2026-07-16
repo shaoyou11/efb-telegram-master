@@ -421,6 +421,15 @@ class DatabaseManager:
             return None
 
     @staticmethod
+    def get_topic_assocs(slave_uid: EFBChannelChatIDStr) -> List[Tuple[TelegramChatID, TelegramTopicID]]:
+        assocs = TopicAssoc.select(TopicAssoc.topic_chat_id, TopicAssoc.message_thread_id)\
+            .where(TopicAssoc.slave_uid == slave_uid)
+        return [
+            (TelegramChatID(int(item.topic_chat_id)), TelegramTopicID(int(item.message_thread_id)))
+            for item in assocs
+        ]
+
+    @staticmethod
     def get_topic_slave(topic_chat_id: TelegramChatID,
                         message_thread_id: Optional[TelegramTopicID] = None,
                         ) -> Optional[EFBChannelChatIDStr]:
