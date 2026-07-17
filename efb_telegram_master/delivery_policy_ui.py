@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, List, Optional, Tuple
 
+from ehforwarderbot import coordinator
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackContext
 
@@ -61,6 +62,12 @@ class DeliveryPolicyUI:
         return bool(update.effective_user and update.effective_user.id in self.channel.config["admins"])
 
     def _all_chats(self, pattern: str = "") -> List:
+        for slave in coordinator.slaves.values():
+            try:
+                for chat in slave.get_chats():
+                    self.channel.chat_manager.update_chat_obj(chat, full_update=True)
+            except Exception:
+                self.logger.exception("Unable to refresh chats from %s", slave.channel_id)
         chats = list(self.channel.chat_manager.all_chats)
         if pattern:
             needle = pattern.casefold()
