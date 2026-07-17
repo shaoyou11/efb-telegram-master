@@ -38,6 +38,8 @@ from .chat_object_cache import ChatObjectCacheManager
 from .commands import CommandsManager
 from .cleanup import build_storage_text, load_storage_report, parse_cleanup_action
 from .db import DatabaseManager
+from .delivery_policy import DeliveryPolicyStore
+from .delivery_policy_ui import DeliveryPolicyUI
 from .master_message import MasterMessageProcessor
 from .message import ETMMsg
 from .rpc_utils import RPCUtilities
@@ -124,10 +126,13 @@ class TelegramChannel(MasterChannel):
         self.flag: ExperimentalFlagsManager = ExperimentalFlagsManager(self)
         self.db: DatabaseManager = DatabaseManager(self)
         self.chat_manager: ChatObjectCacheManager = ChatObjectCacheManager(self)
+        self.delivery_policy_store = DeliveryPolicyStore(
+            efb_utils.get_config_path(self.channel_id).parent / "delivery-policies.json")
         self.chat_dest_cache: ChatDestinationCache = ChatDestinationCache(self.flag("send_to_last_chat"))
         self.bot_manager: TelegramBotManager = TelegramBotManager(self)
         self.commands: CommandsManager = CommandsManager(self)
         self.chat_binding: ChatBindingManager = ChatBindingManager(self)
+        self.delivery_policy_ui = DeliveryPolicyUI(self)
         self.slave_messages: SlaveMessageProcessor = SlaveMessageProcessor(self)
         self.topic_group: Optional[TelegramChatID] = TelegramChatID(self.flag('topic_group'))
 
@@ -148,6 +153,10 @@ class TelegramChannel(MasterChannel):
             CommandHandler("cleanup", self.cleanup, filters=non_edit_filter))
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.cleanup_callback, pattern=r"^cleanup:"))
+        self.bot_manager.dispatcher.add_handler(
+            CommandHandler("filter", self.delivery_policy_ui.command, filters=non_edit_filter))
+        self.bot_manager.dispatcher.add_handler(
+            CallbackQueryHandler(self.delivery_policy_ui.callback, pattern=r"^filter:"))
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.void_callback_handler, pattern="void"))
         self.bot_manager.dispatcher.add_handler(
@@ -510,6 +519,8 @@ class TelegramChannel(MasterChannel):
                      "    Unlink all remote chats in this chat.\n"
                      "/info\n"
                      "    Show information of the current Telegram chat.\n"
+                     "/filter [name]\n"
+                     "    Configure delivery policy for a remote chat.\n"
                      "/react [emoji]\n"
                      "    React to a message with an emoji, or show a list of members reacted.\n"
                      "/update_info\n"

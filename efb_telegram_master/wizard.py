@@ -312,6 +312,7 @@ def setup_telegram_bot_commands_list(data):
                 ("chat", _("Generate a chat head.")),
                 ("extra", _("Access additional features from Slave Channels.")),
                 ("cleanup", _("Show EFB storage usage and cleanup paths.")),
+                ("filter", _("Configure delivery policy for a remote chat.")),
                 ("update_info", _("Update info of linked Telegram group.")),
                 ("react", _("Send a reaction to a message, or show a list of reactors.")),
                 ("rm", _("Remove a message from its remote chat.")),
