@@ -4,6 +4,7 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from ehforwarderbot import Message, Chat
 from ehforwarderbot.types import ReactionName
 from efb_telegram_master.constants import Emoji
+from efb_telegram_master.delivery_policy import DeliveryPolicy
 from efb_telegram_master.slave_message import SlaveMessageProcessor
 
 
@@ -62,6 +63,42 @@ def build_dummy_message(chat: Chat, author: Chat) -> Message:
     message.chat = chat
     message.author = author
     return message
+
+
+def test_delivery_policy_defaults_to_normal(channel, private):
+    msg = build_dummy_message(private, private)
+
+    assert channel.slave_messages.delivery_policy(msg) is DeliveryPolicy.NORMAL
+
+
+def test_filtered_delivery_stops_before_destination_lookup(channel, private, monkeypatch):
+    msg = build_dummy_message(private, private)
+    msg.uid = "filtered-message"
+    monkeypatch.setattr(channel.delivery_policy_store, "get", lambda _: DeliveryPolicy.FILTERED)
+    called = False
+
+    def unexpected_destination(_):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(channel.slave_messages, "get_slave_msg_dest", unexpected_destination)
+
+    assert channel.slave_messages.send_message(msg) is msg
+    assert not called
+
+
+def test_silent_delivery_overrides_normal_notification(channel, private, monkeypatch):
+    msg = build_dummy_message(private, private)
+    monkeypatch.setattr(channel.delivery_policy_store, "get", lambda _: DeliveryPolicy.SILENT)
+    monkeypatch.setattr(channel.slave_messages, "get_slave_msg_dest", lambda _: ("", (1, None)))
+    monkeypatch.setattr(channel.slave_messages, "is_silent", lambda _: False)
+    captured = {}
+    monkeypatch.setattr(channel.slave_messages, "dispatch_message",
+                        lambda **kwargs: captured.update(kwargs))
+
+    channel.slave_messages.send_message(msg)
+
+    assert captured["silent"] is True
 
 
 def test_slave_message_generate_common_private(generate_message_template, private):

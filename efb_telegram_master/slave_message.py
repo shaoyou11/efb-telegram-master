@@ -33,6 +33,7 @@ from .chat_destination_cache import ChatDestinationCache
 from .chat_object_cache import ChatObjectCacheManager
 from .commands import ETMCommandMsgStorage
 from .constants import Emoji
+from .delivery_policy import DeliveryPolicy
 from .file_size_policy import exceeds_bot_api_limit
 from .locale_mixin import LocaleMixin
 from .message import ETMMsg
@@ -56,6 +57,9 @@ class SlaveMessageProcessor(LocaleMixin):
         self.db: 'DatabaseManager' = channel.db
         self.chat_dest_cache: ChatDestinationCache = channel.chat_dest_cache
         self.chat_manager: ChatObjectCacheManager = channel.chat_manager
+
+    def delivery_policy(self, msg: Message) -> DeliveryPolicy:
+        return self.channel.delivery_policy_store.get(utils.chat_id_to_str(chat=msg.chat))
 
     def is_silent(self, msg: Message) -> Optional[bool]:
         """Determine if a message shall be sent silently.
@@ -93,12 +97,19 @@ class SlaveMessageProcessor(LocaleMixin):
             xid = msg.uid
             self.logger.debug("[%s] Slave message delivered to ETM.\n%s", xid, msg)
 
+            policy = self.delivery_policy(msg)
+            if policy is DeliveryPolicy.FILTERED:
+                self.logger.debug("[%s] Message is not delivered per chat delivery policy.", xid)
+                return msg
+
             msg_template, (tg_dest, thread_id) = self.get_slave_msg_dest(msg)
 
             silent = self.is_silent(msg)
             if silent is None:
                 self.logger.debug("[%s] Message is not delivered per silent settings.", xid)
                 return msg
+            if policy is DeliveryPolicy.SILENT:
+                silent = True
 
             if tg_dest is None:
                 self.logger.debug("[%s] Sender of the message is muted.", xid)
