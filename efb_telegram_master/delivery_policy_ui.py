@@ -62,13 +62,15 @@ class DeliveryPolicyUI:
         return bool(update.effective_user and update.effective_user.id in self.channel.config["admins"])
 
     def _all_chats(self, pattern: str = "") -> List:
-        for slave in coordinator.slaves.values():
-            try:
-                for chat in slave.get_chats():
-                    self.channel.chat_manager.update_chat_obj(chat, full_update=True)
-            except Exception:
-                self.logger.exception("Unable to refresh chats from %s", slave.channel_id)
         chats = list(self.channel.chat_manager.all_chats)
+        if not chats:
+            for slave in coordinator.slaves.values():
+                try:
+                    for chat in slave.get_chats():
+                        self.channel.chat_manager.update_chat_obj(chat, full_update=True)
+                except Exception:
+                    self.logger.exception("Unable to refresh chats from %s", slave.channel_id)
+            chats = list(self.channel.chat_manager.all_chats)
         if pattern:
             needle = pattern.casefold()
             chats = [chat for chat in chats if needle in chat.long_name.casefold()]
@@ -116,10 +118,10 @@ class DeliveryPolicyUI:
         if not self._is_admin(update):
             update.effective_message.reply_text("只有管理员可以修改会话接收设置。")
             return
+        sent = update.effective_message.reply_text("正在载入会话…")
         pattern = " ".join(context.args).strip()
         current_chat = None if pattern else self._context_chat(update)
         chats = [current_chat] if current_chat else self._all_chats(pattern)
-        sent = update.effective_message.reply_text("正在载入会话…")
         key = (sent.chat_id, sent.message_id)
         self.sessions[key] = {
             "all_chats": chats,

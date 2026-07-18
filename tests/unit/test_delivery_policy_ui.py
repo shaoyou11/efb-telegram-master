@@ -57,6 +57,21 @@ def test_filter_chat_list_refreshes_from_slave(monkeypatch):
     chat_manager.update_chat_obj.assert_called_once_with(remote_chat, full_update=True)
 
 
+def test_filter_chat_list_uses_cache_without_refreshing_slave(monkeypatch):
+    cached_chat = SimpleNamespace(long_name="已有会话", last_message_time=1)
+    chat_manager = Mock()
+    type(chat_manager).all_chats = property(lambda _: iter([cached_chat]))
+    channel = SimpleNamespace(chat_manager=chat_manager, delivery_policy_store=Mock())
+    slave = Mock(channel_id="honus.comwechat")
+    monkeypatch.setattr(coordinator, "slaves", {slave.channel_id: slave})
+
+    from efb_telegram_master.delivery_policy_ui import DeliveryPolicyUI
+    chats = DeliveryPolicyUI(channel)._all_chats()
+
+    assert chats == [cached_chat]
+    slave.get_chats.assert_not_called()
+
+
 def test_filter_resolves_single_linked_group_as_current_chat():
     remote_chat = SimpleNamespace(uid="gh_news", module_id="honus.comwechat")
     chat_manager = Mock()
