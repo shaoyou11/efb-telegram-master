@@ -22,7 +22,7 @@ def redact_error(value: str) -> str:
 
 
 def backup_summary(path: Path) -> dict:
-    directories = sorted(item for item in path.iterdir() if item.is_dir()) if path.exists() else []
+    directories = [item for item in path.iterdir() if item.is_dir()] if path.exists() else []
     total = 0
     for directory in directories:
         for item in directory.rglob("*"):
@@ -33,7 +33,7 @@ def backup_summary(path: Path) -> dict:
                     pass
     return {
         "count": len(directories),
-        "latest": directories[-1].name if directories else "无",
+        "latest": max(directories, key=lambda item: item.stat().st_mtime).name if directories else "无",
         "bytes": total,
         "path": str(path),
     }
@@ -71,7 +71,7 @@ def _post_json(url: str, payload: bytes = b"{}", timeout: int = 3) -> dict:
 
 def _human_size(size: int) -> str:
     value = float(size)
-    for unit in ("B", "MB", "GB", "TB"):
+    for unit in ("B", "KB", "MB", "GB", "TB"):
         if value < 1024 or unit == "TB":
             return f"{value:.2f} {unit}"
         value /= 1024

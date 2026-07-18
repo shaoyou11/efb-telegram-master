@@ -1,6 +1,8 @@
+import os
 from pathlib import Path
 
 from efb_telegram_master.operations_ui import (
+    _human_size,
     backup_summary,
     redact_error,
     scan_sensitive_keys,
@@ -12,11 +14,17 @@ def test_backup_summary_reports_count_and_latest_without_file_content(tmp_path: 
     second = tmp_path / "config-20260718-020000"
     first.mkdir()
     second.mkdir()
+    os.utime(first, (2000, 2000))
+    os.utime(second, (1000, 1000))
 
     result = backup_summary(tmp_path)
 
     assert result["count"] == 2
-    assert result["latest"] == second.name
+    assert result["latest"] == first.name
+
+
+def test_human_size_uses_complete_unit_sequence():
+    assert _human_size(int(1.5 * 1024**3)) == "1.50 GB"
 
 
 def test_redact_error_removes_bot_tokens_and_urls():
