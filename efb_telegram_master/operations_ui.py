@@ -44,7 +44,8 @@ def scan_sensitive_keys(path: Path) -> List[dict]:
     if not path.exists():
         return findings
     for item in sorted(path.rglob("*")):
-        if not item.is_file() or item.suffix.lower() not in {".yaml", ".yml", ".json", ".env"}:
+        if not item.is_file() or (item.suffix.lower() not in {".yaml", ".yml", ".json"}
+                                  and item.name != ".env"):
             continue
         keys = set()
         try:
