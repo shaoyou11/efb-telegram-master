@@ -79,3 +79,15 @@ def test_filter_resolves_single_linked_group_as_current_chat():
 
     assert chat is remote_chat
     chat_manager.get_chat.assert_called_once_with("honus.comwechat", "gh_news")
+
+
+def test_filter_views_select_policy_and_public_account():
+    store = Mock()
+    store.get.side_effect = [DeliveryPolicy.SILENT, DeliveryPolicy.FILTERED]
+    channel = SimpleNamespace(chat_manager=Mock(), delivery_policy_store=store)
+    ui = DeliveryPolicyUI(channel)
+    public = SimpleNamespace(vendor_specific={"is_mp": True})
+    private = SimpleNamespace(vendor_specific={})
+
+    assert ui._view_chats([public, private], "silent") == [public]
+    assert ui._view_chats([public, private], "mp") == [public]

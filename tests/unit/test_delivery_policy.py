@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 from efb_telegram_master.delivery_policy import DeliveryPolicy, DeliveryPolicyStore
 
@@ -52,3 +53,24 @@ def test_each_policy_round_trips(tmp_path):
     for policy in DeliveryPolicy:
         store.set("channel chat", policy)
         assert DeliveryPolicyStore(path).get("channel chat") is policy
+
+
+def test_quiet_hours_silence_normal_chat_but_preserve_filtered(tmp_path):
+    store = DeliveryPolicyStore(tmp_path / "delivery-policies.json")
+    store.set_quiet_hours("23:00", "07:00", enabled=True)
+    night = datetime(2026, 7, 18, 1, 0)
+
+    assert store.get("normal chat", now=night) is DeliveryPolicy.SILENT
+    store.set("blocked chat", DeliveryPolicy.FILTERED)
+    assert store.get("blocked chat", now=night) is DeliveryPolicy.FILTERED
+
+
+def test_quiet_hours_persist_and_can_be_disabled(tmp_path):
+    path = tmp_path / "delivery-policies.json"
+    store = DeliveryPolicyStore(path)
+    store.set_quiet_hours("23:00", "07:00", enabled=True)
+
+    reloaded = DeliveryPolicyStore(path)
+    assert reloaded.quiet_hours()["enabled"] is True
+    reloaded.set_quiet_hours("23:00", "07:00", enabled=False)
+    assert DeliveryPolicyStore(path).quiet_hours()["enabled"] is False

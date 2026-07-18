@@ -74,6 +74,17 @@ class DeliveryPolicyUI:
             chats = [chat for chat in chats if needle in chat.long_name.casefold()]
         return sorted(chats, key=lambda chat: chat.last_message_time, reverse=True)
 
+    def _view_chats(self, chats: List, view: str) -> List:
+        if view == "silent":
+            return [chat for chat in chats if self.store.get(utils.chat_id_to_str(chat=chat)) is DeliveryPolicy.SILENT]
+        if view == "filtered":
+            return [chat for chat in chats if self.store.get(utils.chat_id_to_str(chat=chat)) is DeliveryPolicy.FILTERED]
+        if view == "mp":
+            return [chat for chat in chats if getattr(chat, "vendor_specific", {}).get("is_mp")]
+        if view == "group":
+            return [chat for chat in chats if "Group" in chat.__class__.__name__]
+        return chats
+
     def _context_chat(self, update: Update):
         if not update.effective_chat or not update.effective_message:
             return None
@@ -110,7 +121,13 @@ class DeliveryPolicyUI:
         chats = [current_chat] if current_chat else self._all_chats(pattern)
         sent = update.effective_message.reply_text("正在载入会话…")
         key = (sent.chat_id, sent.message_id)
-        self.sessions[key] = {"chats": chats, "offset": 0, "selected": 0 if current_chat else None}
+        self.sessions[key] = {
+            "all_chats": chats,
+            "chats": chats,
+            "offset": 0,
+            "selected": 0 if current_chat else None,
+            "view": "all",
+        }
         if current_chat:
             self._render_detail_message(sent.chat_id, sent.message_id, current_chat)
         else:
@@ -129,7 +146,28 @@ class DeliveryPolicyUI:
                 callback_data=f"filter:chat:{index}")])
         navigation = build_list_navigation(offset, self.PAGE_SIZE, len(chats)).inline_keyboard
         rows.extend(navigation)
-        text = "会话接收设置\n请选择微信会话。"
+        rows.insert(0, [
+            InlineKeyboardButton("全部", callback_data="filter:view:all"),
+            InlineKeyboardButton("静默", callback_data="filter:view:silent"),
+            InlineKeyboardButton("已过滤", callback_data="filter:view:filtered"),
+        ])
+        rows.insert(1, [
+            InlineKeyboardButton("公众号", callback_data="filter:view:mp"),
+            InlineKeyboardButton("群聊", callback_data="filter:view:group"),
+        ])
+        quiet = self.store.quiet_hours()
+        quiet_label = "关闭夜间静默" if quiet["enabled"] else "开启夜间静默 23:00-07:00"
+        rows.insert(2, [InlineKeyboardButton(quiet_label, callback_data="filter:quiet:toggle")])
+        if session["view"] == "mp" and chats:
+            rows.insert(3, [
+                InlineKeyboardButton("公众号全部静默", callback_data="filter:bulk:silent"),
+                InlineKeyboardButton("公众号全部过滤", callback_data="filter:bulk:filtered"),
+            ])
+        rules = self.store.list_rules()
+        silent_count = sum(1 for rule in rules.values() if rule.get("policy") == "silent")
+        filtered_count = sum(1 for rule in rules.values() if rule.get("policy") == "filtered")
+        text = ("会话接收设置\n请选择微信会话。\n\n"
+                f"当前列表：{len(chats)} 个｜静默：{silent_count}｜过滤：{filtered_count}")
         if not chats:
             text += "\n\n没有找到匹配的会话。"
         self.channel.bot_manager.edit_message_text(
@@ -179,6 +217,43 @@ class DeliveryPolicyUI:
         query.answer()
         if name == "page":
             session["offset"] = max(0, int(value))
+            self._render_list(*key)
+            return
+        if name == "view":
+            session["view"] = value
+            session["chats"] = self._view_chats(session["all_chats"], value)
+            session["offset"] = 0
+            self._render_list(*key)
+            return
+        if name == "quiet":
+            quiet = self.store.quiet_hours()
+            self.store.set_quiet_hours("23:00", "07:00", not quiet["enabled"])
+            self._render_list(*key)
+            return
+        if name == "bulk":
+            if session.get("view") != "mp" or value not in {"silent", "filtered"}:
+                return
+            label = "静默接收" if value == "silent" else "完全过滤"
+            markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("确认", callback_data=f"filter:confirm:{value}"),
+                InlineKeyboardButton("取消", callback_data="filter:backlist"),
+            ], [InlineKeyboardButton("关闭", callback_data="filter:close")]])
+            query.edit_message_text(
+                f"批量设置确认\n\n将 {len(session['chats'])} 个公众号设置为“{label}”。\n"
+                "只修改接收策略，不删除微信或 Telegram 消息。",
+                reply_markup=markup,
+            )
+            return
+        if name == "confirm":
+            if session.get("view") != "mp" or value not in {"silent", "filtered"}:
+                return
+            policy = DeliveryPolicy(value)
+            for chat in session["chats"]:
+                self.store.set(utils.chat_id_to_str(chat=chat), policy,
+                               name=chat.long_name, chat_type=chat.__class__.__name__)
+            self._render_list(*key)
+            return
+        if name == "backlist":
             self._render_list(*key)
             return
         if name == "back":

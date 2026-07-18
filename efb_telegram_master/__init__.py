@@ -40,6 +40,8 @@ from .cleanup import build_storage_text, load_storage_report, parse_cleanup_acti
 from .db import DatabaseManager
 from .delivery_policy import DeliveryPolicyStore
 from .delivery_policy_ui import DeliveryPolicyUI
+from .operations_ui import OperationsUI
+from .delivery_telemetry import DeliveryGuard
 from .master_message import MasterMessageProcessor
 from .message import ETMMsg
 from .rpc_utils import RPCUtilities
@@ -133,7 +135,10 @@ class TelegramChannel(MasterChannel):
         self.commands: CommandsManager = CommandsManager(self)
         self.chat_binding: ChatBindingManager = ChatBindingManager(self)
         self.delivery_policy_ui = DeliveryPolicyUI(self)
+        self.operations_ui = OperationsUI(self)
         self.slave_messages: SlaveMessageProcessor = SlaveMessageProcessor(self)
+        self.delivery_guard = DeliveryGuard(self.slave_messages.telemetry, self)
+        self.delivery_guard.start()
         self.topic_group: Optional[TelegramChatID] = TelegramChatID(self.flag('topic_group'))
 
         if not self.flag('auto_locale'):
@@ -157,6 +162,18 @@ class TelegramChannel(MasterChannel):
             CommandHandler("filter", self.delivery_policy_ui.command, filters=non_edit_filter))
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.delivery_policy_ui.callback, pattern=r"^filter:"))
+        for command, handler in (
+                ("health", self.operations_ui.health),
+                ("version", self.operations_ui.version),
+                ("backup_info", self.operations_ui.backup_info),
+                ("filetest", self.operations_ui.filetest),
+                ("security", self.operations_ui.security)):
+            self.bot_manager.dispatcher.add_handler(
+                CommandHandler(command, handler, filters=non_edit_filter))
+        self.bot_manager.dispatcher.add_handler(
+            CallbackQueryHandler(self.operations_ui.callback, pattern=r"^ops:"))
+        self.bot_manager.dispatcher.add_handler(
+            CallbackQueryHandler(self.slave_messages.retry_callback, pattern=r"^retry:"))
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.void_callback_handler, pattern="void"))
         self.bot_manager.dispatcher.add_handler(
@@ -521,6 +538,16 @@ class TelegramChannel(MasterChannel):
                      "    Show information of the current Telegram chat.\n"
                      "/filter [name]\n"
                      "    Configure delivery policy for a remote chat.\n"
+                     "/health\n"
+                     "    Show EFB service and message link status.\n"
+                     "/version\n"
+                     "    Show EFB component versions.\n"
+                     "/backup_info\n"
+                     "    Show configuration backup status.\n"
+                     "/filetest\n"
+                     "    Check local Telegram Bot API file support.\n"
+                     "/security\n"
+                     "    Scan configuration key names without showing values.\n"
                      "/react [emoji]\n"
                      "    React to a message with an emoji, or show a list of members reacted.\n"
                      "/update_info\n"

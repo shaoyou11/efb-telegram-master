@@ -17,10 +17,13 @@ import pydub
 import telegram  # lgtm [py/import-and-import-from]
 import telegram.constants
 import telegram.error
+import secrets
+import time
 import telegram.ext
 from PIL import Image
 from telegram import InputFile, ChatAction, InputMediaAudio, InputMediaPhoto, InputMediaDocument, InputMediaVideo, InputMediaAnimation, \
-    InlineKeyboardMarkup, InlineKeyboardButton, ReplyMarkup, TelegramError, InputMedia
+    InlineKeyboardMarkup, InlineKeyboardButton, ReplyMarkup, TelegramError, InputMedia, Update
+from telegram.ext import CallbackContext
 
 from ehforwarderbot import Message, Status, coordinator
 from ehforwarderbot.chat import ChatNotificationState, SelfChatMember, GroupChat, PrivateChat, SystemChat, Chat
@@ -34,6 +37,7 @@ from .chat_object_cache import ChatObjectCacheManager
 from .commands import ETMCommandMsgStorage
 from .constants import Emoji
 from .delivery_policy import DeliveryPolicy
+from .delivery_telemetry import DeliveryTelemetry, sanitize_failure
 from .file_size_policy import exceeds_bot_api_limit
 from .locale_mixin import LocaleMixin
 from .message import ETMMsg
@@ -57,6 +61,9 @@ class SlaveMessageProcessor(LocaleMixin):
         self.db: 'DatabaseManager' = channel.db
         self.chat_dest_cache: ChatDestinationCache = channel.chat_dest_cache
         self.chat_manager: ChatObjectCacheManager = channel.chat_manager
+        telemetry_path = Path(os.getenv("EFB_DELIVERY_STATE", "/data/operations/state/delivery.json"))
+        self.telemetry = DeliveryTelemetry(telemetry_path)
+        self.failed_messages = {}
 
     def delivery_policy(self, msg: Message) -> DeliveryPolicy:
         return self.channel.delivery_policy_store.get(utils.chat_id_to_str(chat=msg.chat))
@@ -93,6 +100,15 @@ class SlaveMessageProcessor(LocaleMixin):
         Args:
             msg (Message): The message.
         """
+        tg_dest = None
+        thread_id = None
+        size = 0
+        if msg.path:
+            try:
+                size = os.path.getsize(msg.path)
+            except OSError:
+                pass
+        self.telemetry.inbound(str(msg.uid), str(msg.type), size)
         try:
             xid = msg.uid
             self.logger.debug("[%s] Slave message delivered to ETM.\n%s", xid, msg)
@@ -100,6 +116,7 @@ class SlaveMessageProcessor(LocaleMixin):
             policy = self.delivery_policy(msg)
             if policy is DeliveryPolicy.FILTERED:
                 self.logger.debug("[%s] Message is not delivered per chat delivery policy.", xid)
+                self.telemetry.filtered(str(msg.uid))
                 return msg
 
             msg_template, (tg_dest, thread_id) = self.get_slave_msg_dest(msg)
@@ -132,10 +149,49 @@ class SlaveMessageProcessor(LocaleMixin):
                                      msg.uid)
 
             self.dispatch_message(msg=msg, msg_template=msg_template, old_msg_id=old_msg_id, tg_dest=tg_dest, thread_id=thread_id, silent=silent)
+            self.telemetry.delivered(str(msg.uid))
         except Exception as e:
+            self.telemetry.failed(str(msg.uid), repr(e))
             self.logger.error("Error occurred while processing message from slave channel.\nMessage: %s\n%s\n%s",
                               repr(msg), repr(e), traceback.format_exc())
+            self._report_delivery_failure(msg, e, tg_dest, thread_id, size)
         return msg
+
+    def _report_delivery_failure(self, msg, error, tg_dest, thread_id, size):
+        token = None
+        rows = []
+        if msg.path and os.path.isfile(msg.path):
+            token = secrets.token_hex(6)
+            self.failed_messages[token] = {"msg": msg, "expires": time.time() + 3600}
+            rows.append([InlineKeyboardButton("重新发送", callback_data=f"retry:{token}")])
+        rows.append([InlineKeyboardButton("关闭", callback_data="retry:close")])
+        text = ("EFB 消息转发失败\n\n"
+                f"类型：{msg.type}\n大小：{size / 1024 / 1024:.2f} MB\n"
+                f"原因：{sanitize_failure(error)}")
+        destination = tg_dest or self.channel.config["admins"][0]
+        self.bot.send_message(destination, text, message_thread_id=thread_id,
+                              reply_markup=InlineKeyboardMarkup(rows))
+
+    def retry_callback(self, update: Update, _context: CallbackContext):
+        query = update.callback_query
+        if not query or not query.data:
+            return
+        action = query.data.split(":", 1)[1]
+        if action == "close":
+            query.answer()
+            query.message.delete()
+            return
+        item = self.failed_messages.pop(action, None)
+        if not item or item["expires"] < time.time():
+            query.answer("重试已失效，请等待微信重新发送。", show_alert=True)
+            return
+        msg = item["msg"]
+        if not msg.path or not os.path.isfile(msg.path):
+            query.answer("原文件已不存在，无法重试。", show_alert=True)
+            return
+        msg.file = open(msg.path, "rb")
+        query.answer("正在重新发送")
+        self.send_message(msg)
 
     @staticmethod
     def handle_topic_error(fn):
