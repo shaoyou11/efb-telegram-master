@@ -55,3 +55,27 @@ def test_filter_chat_list_refreshes_from_slave(monkeypatch):
 
     assert chats == [remote_chat]
     chat_manager.update_chat_obj.assert_called_once_with(remote_chat, full_update=True)
+
+
+def test_filter_resolves_single_linked_group_as_current_chat():
+    remote_chat = SimpleNamespace(uid="gh_news", module_id="honus.comwechat")
+    chat_manager = Mock()
+    chat_manager.get_chat.return_value = remote_chat
+    db = Mock()
+    db.get_chat_assoc.return_value = ["honus.comwechat gh_news"]
+    channel = SimpleNamespace(
+        channel_id="blueset.telegram",
+        chat_manager=chat_manager,
+        delivery_policy_store=Mock(),
+        db=db,
+    )
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=-100123, type="supergroup", is_forum=False),
+        effective_message=SimpleNamespace(message_thread_id=None),
+    )
+
+    from efb_telegram_master.delivery_policy_ui import DeliveryPolicyUI
+    chat = DeliveryPolicyUI(channel)._context_chat(update)
+
+    assert chat is remote_chat
+    chat_manager.get_chat.assert_called_once_with("honus.comwechat", "gh_news")

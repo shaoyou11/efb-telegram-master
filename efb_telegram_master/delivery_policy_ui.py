@@ -74,16 +74,47 @@ class DeliveryPolicyUI:
             chats = [chat for chat in chats if needle in chat.long_name.casefold()]
         return sorted(chats, key=lambda chat: chat.last_message_time, reverse=True)
 
+    def _context_chat(self, update: Update):
+        if not update.effective_chat or not update.effective_message:
+            return None
+        if update.effective_chat.type == "private":
+            return None
+
+        links = []
+        thread_id = update.effective_message.message_thread_id
+        if update.effective_chat.is_forum and thread_id:
+            linked = self.channel.db.get_topic_slave(
+                topic_chat_id=update.effective_chat.id,
+                message_thread_id=thread_id,
+            )
+            if linked:
+                links = [linked]
+        else:
+            master_uid = utils.chat_id_to_str(
+                channel_id=self.channel.channel_id,
+                chat_uid=str(update.effective_chat.id),
+            )
+            links = self.channel.db.get_chat_assoc(master_uid=master_uid)
+
+        if len(links) != 1:
+            return None
+        channel_id, chat_uid, _ = utils.chat_id_str_to_id(links[0])
+        return self.channel.chat_manager.get_chat(channel_id, chat_uid)
+
     def command(self, update: Update, context: CallbackContext):
         if not self._is_admin(update):
             update.effective_message.reply_text("只有管理员可以修改会话接收设置。")
             return
         pattern = " ".join(context.args).strip()
-        chats = self._all_chats(pattern)
+        current_chat = None if pattern else self._context_chat(update)
+        chats = [current_chat] if current_chat else self._all_chats(pattern)
         sent = update.effective_message.reply_text("正在载入会话…")
         key = (sent.chat_id, sent.message_id)
-        self.sessions[key] = {"chats": chats, "offset": 0, "selected": None}
-        self._render_list(sent.chat_id, sent.message_id)
+        self.sessions[key] = {"chats": chats, "offset": 0, "selected": 0 if current_chat else None}
+        if current_chat:
+            self._render_detail_message(sent.chat_id, sent.message_id, current_chat)
+        else:
+            self._render_list(sent.chat_id, sent.message_id)
 
     def _render_list(self, chat_id: int, message_id: int):
         session = self.sessions[(chat_id, message_id)]
@@ -105,7 +136,7 @@ class DeliveryPolicyUI:
             chat_id=chat_id, message_id=message_id, text=text,
             reply_markup=InlineKeyboardMarkup(rows))
 
-    def _render_detail(self, query, chat):
+    def _detail_content(self, chat):
         chat_key = utils.chat_id_to_str(chat=chat)
         policy = self.store.get(chat_key)
         text = (f"会话接收设置\n\n会话：{chat.long_name}\n"
@@ -113,7 +144,16 @@ class DeliveryPolicyUI:
                 "正常接收：转发并通知\n"
                 "静默接收：转发但不弹通知\n"
                 "完全过滤：不转发，微信原消息保留")
-        query.edit_message_text(text=text, reply_markup=build_policy_keyboard(policy))
+        return text, build_policy_keyboard(policy)
+
+    def _render_detail_message(self, chat_id: int, message_id: int, chat):
+        text, markup = self._detail_content(chat)
+        self.channel.bot_manager.edit_message_text(
+            chat_id=chat_id, message_id=message_id, text=text, reply_markup=markup)
+
+    def _render_detail(self, query, chat):
+        text, markup = self._detail_content(chat)
+        query.edit_message_text(text=text, reply_markup=markup)
 
     def callback(self, update: Update, context: CallbackContext):
         query = update.callback_query
