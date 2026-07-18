@@ -26,20 +26,20 @@
 - Consumes: `DeliveryPolicyUI._view_chats(chats, view)` 和现有 session 字典。
 - Produces: `contact` 分类；`overview` 视图不生成会话按钮。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 增加联系人分类测试，并验证 `overview` 不包含 `filter:chat:` 回调、包含五个分类入口。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `pytest -q tests/unit/test_delivery_policy_ui.py`
 Expected: FAIL，联系人视图仍返回全部会话或概览仍出现会话按钮。
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 在 `_view_chats` 中将联系人定义为非公众号且非群聊；在 `_render_list` 中为 `overview` 跳过会话行，移除“全部”，加入“联系人”，保留统计与夜间静默按钮。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `pytest -q tests/unit/test_delivery_policy_ui.py`
 Expected: PASS。
@@ -54,19 +54,19 @@ Expected: PASS。
 - Consumes: `/filter` 的 `context.args` 和 `_context_chat(update)`。
 - Produces: 无参数主聊天进入 `overview`；关键词进入匹配列表；独立话题进入详情。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 验证无关键词主聊天 session 的 `view` 为 `overview` 且 `chats` 为空，关键词入口保留匹配结果。
 
-- [ ] **Step 2: 最小实现并验证语法和回归测试**
+- [x] **Step 2: 最小实现并验证语法和回归测试**
 
 Run: `python3 -m py_compile efb_telegram_master/delivery_policy_ui.py && pytest -q tests/unit/test_delivery_policy_ui.py`
 Expected: PASS。
 
-- [ ] **Step 3: 提交源码并更新镜像固定提交**
+- [x] **Step 3: 提交源码并更新镜像固定提交**
 
 提交到 `shaoyou11/efb-telegram-master`，再将镜像仓库 Dockerfile 固定到新提交并推送。
 
-- [ ] **Step 4: 构建、备份、部署和验证**
+- [x] **Step 4: 构建、备份、部署和验证**
 
 等待 GitHub Actions 成功；在 NAS 容器内创建 `/data/backups/config-时间戳`；仅重建 EFB 容器；验证健康状态、重启次数、镜像版本及分类回归测试。
