@@ -85,6 +85,12 @@ class DeliveryPolicyUI:
             return [chat for chat in chats if getattr(chat, "vendor_specific", {}).get("is_mp")]
         if view == "group":
             return [chat for chat in chats if "Group" in chat.__class__.__name__]
+        if view == "contact":
+            return [
+                chat for chat in chats
+                if not getattr(chat, "vendor_specific", {}).get("is_mp")
+                and "Group" not in chat.__class__.__name__
+            ]
         return chats
 
     def _context_chat(self, update: Update):
@@ -121,14 +127,15 @@ class DeliveryPolicyUI:
         sent = update.effective_message.reply_text("正在载入会话…")
         pattern = " ".join(context.args).strip()
         current_chat = None if pattern else self._context_chat(update)
-        chats = [current_chat] if current_chat else self._all_chats(pattern)
+        matched_chats = [] if current_chat else self._all_chats(pattern)
+        chats = [current_chat] if current_chat else (matched_chats if pattern else [])
         key = (sent.chat_id, sent.message_id)
         self.sessions[key] = {
-            "all_chats": chats,
+            "all_chats": matched_chats,
             "chats": chats,
             "offset": 0,
             "selected": 0 if current_chat else None,
-            "view": "all",
+            "view": "detail" if current_chat else ("search" if pattern else "overview"),
         }
         if current_chat:
             self._render_detail_message(sent.chat_id, sent.message_id, current_chat)
@@ -139,38 +146,46 @@ class DeliveryPolicyUI:
         session = self.sessions[(chat_id, message_id)]
         chats = session["chats"]
         offset = session["offset"]
+        view = session["view"]
         rows = []
-        for index in range(offset, min(offset + self.PAGE_SIZE, len(chats))):
-            chat = chats[index]
-            policy = self.store.get(utils.chat_id_to_str(chat=chat))
-            rows.append([InlineKeyboardButton(
-                f"{chat.channel_emoji}{chat.chat_type_emoji} {chat.long_name} · {POLICY_LABELS[policy]}",
-                callback_data=f"filter:chat:{index}")])
-        navigation = build_list_navigation(offset, self.PAGE_SIZE, len(chats)).inline_keyboard
-        rows.extend(navigation)
+        if view != "overview":
+            for index in range(offset, min(offset + self.PAGE_SIZE, len(chats))):
+                chat = chats[index]
+                policy = self.store.get(utils.chat_id_to_str(chat=chat))
+                rows.append([InlineKeyboardButton(
+                    f"{chat.channel_emoji}{chat.chat_type_emoji} {chat.long_name} · {POLICY_LABELS[policy]}",
+                    callback_data=f"filter:chat:{index}")])
         rows.insert(0, [
-            InlineKeyboardButton("全部", callback_data="filter:view:all"),
             InlineKeyboardButton("静默", callback_data="filter:view:silent"),
             InlineKeyboardButton("已过滤", callback_data="filter:view:filtered"),
         ])
         rows.insert(1, [
             InlineKeyboardButton("公众号", callback_data="filter:view:mp"),
             InlineKeyboardButton("群聊", callback_data="filter:view:group"),
+            InlineKeyboardButton("联系人", callback_data="filter:view:contact"),
         ])
         quiet = self.store.quiet_hours()
         quiet_label = "关闭夜间静默" if quiet["enabled"] else "开启夜间静默 23:00-07:00"
         rows.insert(2, [InlineKeyboardButton(quiet_label, callback_data="filter:quiet:toggle")])
-        if session["view"] == "mp" and chats:
+        if view == "mp" and chats:
             rows.insert(3, [
                 InlineKeyboardButton("公众号全部静默", callback_data="filter:bulk:silent"),
                 InlineKeyboardButton("公众号全部过滤", callback_data="filter:bulk:filtered"),
             ])
+        if view != "overview":
+            rows.append([InlineKeyboardButton("返回概览", callback_data="filter:view:overview")])
+        rows.extend(build_list_navigation(offset, self.PAGE_SIZE, len(chats)).inline_keyboard)
         rules = self.store.list_rules()
         silent_count = sum(1 for rule in rules.values() if rule.get("policy") == "silent")
         filtered_count = sum(1 for rule in rules.values() if rule.get("policy") == "filtered")
-        text = ("会话接收设置\n请选择微信会话。\n\n"
-                f"当前列表：{len(chats)} 个｜静默：{silent_count}｜过滤：{filtered_count}")
-        if not chats:
+        if view == "overview":
+            text = ("会话接收设置\n\n"
+                    f"静默：{silent_count} 个｜完全过滤：{filtered_count} 个\n\n"
+                    "请选择分类，或发送 /filter 关键词搜索会话。")
+        else:
+            text = ("会话接收设置\n请选择微信会话。\n\n"
+                    f"当前列表：{len(chats)} 个｜静默：{silent_count}｜过滤：{filtered_count}")
+        if view != "overview" and not chats:
             text += "\n\n没有找到匹配的会话。"
         self.channel.bot_manager.edit_message_text(
             chat_id=chat_id, message_id=message_id, text=text,
@@ -223,7 +238,10 @@ class DeliveryPolicyUI:
             return
         if name == "view":
             session["view"] = value
-            session["chats"] = self._view_chats(session["all_chats"], value)
+            session["chats"] = (
+                [] if value == "overview"
+                else self._view_chats(session["all_chats"], value)
+            )
             session["offset"] = 0
             self._render_list(*key)
             return

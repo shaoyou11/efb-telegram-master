@@ -106,3 +106,83 @@ def test_filter_views_select_policy_and_public_account():
 
     assert ui._view_chats([public, private], "silent") == [public]
     assert ui._view_chats([public, private], "mp") == [public]
+
+
+def test_filter_contact_view_excludes_public_accounts_and_groups():
+    store = Mock()
+    channel = SimpleNamespace(chat_manager=Mock(), delivery_policy_store=store)
+    ui = DeliveryPolicyUI(channel)
+    contact = SimpleNamespace(vendor_specific={})
+    public = SimpleNamespace(vendor_specific={"is_mp": True})
+    group = type("GroupChat", (), {"vendor_specific": {}})()
+
+    assert ui._view_chats([contact, public, group], "contact") == [contact]
+
+
+def test_filter_overview_shows_categories_without_chat_buttons():
+    store = Mock()
+    store.quiet_hours.return_value = {"enabled": False}
+    store.list_rules.return_value = {
+        "silent": {"policy": "silent"},
+        "filtered": {"policy": "filtered"},
+    }
+    bot_manager = Mock()
+    channel = SimpleNamespace(
+        chat_manager=Mock(), delivery_policy_store=store, bot_manager=bot_manager)
+    ui = DeliveryPolicyUI(channel)
+    ui.sessions[(1, 2)] = {
+        "all_chats": [SimpleNamespace(long_name="不会显示")],
+        "chats": [],
+        "offset": 0,
+        "selected": None,
+        "view": "overview",
+    }
+
+    ui._render_list(1, 2)
+
+    markup = bot_manager.edit_message_text.call_args.kwargs["reply_markup"]
+    callbacks = callback_values(markup)
+    assert not any(value.startswith("filter:chat:") for value in callbacks)
+    assert {
+        "filter:view:silent",
+        "filter:view:filtered",
+        "filter:view:mp",
+        "filter:view:group",
+        "filter:view:contact",
+    }.issubset(callbacks)
+    assert "filter:view:all" not in callbacks
+
+
+def test_filter_main_command_opens_overview_but_keyword_opens_results():
+    cached = [SimpleNamespace(long_name="普法天地", last_message_time=1)]
+    chat_manager = Mock()
+    type(chat_manager).all_chats = property(lambda _: iter(cached))
+    store = Mock()
+    channel = SimpleNamespace(
+        config={"admins": [7]},
+        chat_manager=chat_manager,
+        delivery_policy_store=store,
+    )
+    ui = DeliveryPolicyUI(channel)
+    ui._render_list = Mock()
+    sent_messages = iter([
+        SimpleNamespace(chat_id=1, message_id=10),
+        SimpleNamespace(chat_id=1, message_id=11),
+    ])
+    message = SimpleNamespace(
+        message_thread_id=None,
+        reply_text=lambda text: next(sent_messages),
+    )
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=7),
+        effective_chat=SimpleNamespace(type="private"),
+        effective_message=message,
+    )
+
+    ui.command(update, SimpleNamespace(args=[]))
+    ui.command(update, SimpleNamespace(args=["普法"]))
+
+    assert ui.sessions[(1, 10)]["view"] == "overview"
+    assert ui.sessions[(1, 10)]["chats"] == []
+    assert ui.sessions[(1, 11)]["view"] == "search"
+    assert ui.sessions[(1, 11)]["chats"] == cached
