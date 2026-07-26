@@ -43,6 +43,7 @@ from .rpc_utils import RPCUtilities
 from .slave_message import SlaveMessageProcessor
 from .utils import ExperimentalFlagsManager, EFBChannelChatIDStr, TelegramChatID, TelegramMessageID
 from .watchdog_control import HELP_TEXT, WatchdogControl
+from .wechat_control import WeChatControl
 
 
 class TelegramChannel(MasterChannel):
@@ -147,6 +148,7 @@ class TelegramChannel(MasterChannel):
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.void_callback_handler, pattern="void"))
         self.watchdog_control = WatchdogControl(self)
+        self.wechat_control = WeChatControl(self)
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.bot_manager.session_expired))
         self.bot_manager.dispatcher.add_handler(

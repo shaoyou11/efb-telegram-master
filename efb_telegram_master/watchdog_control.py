@@ -13,7 +13,8 @@ COMMANDS = (
     ("unlink_all", "解除群组中的全部远程会话。"),
     ("info", "显示当前 Telegram 会话信息。"),
     ("chat", "创建会话入口。"),
-    ("extra", "访问微信端附加功能。"),
+    ("login", "获取微信登录二维码。"),
+    ("wechat", "管理微信登录与自动恢复。"),
     ("watchdog", "管理微信自动恢复开关。"),
     ("update_info", "更新已绑定群组信息。"),
     ("react", "回应消息或查看回应者。"),
@@ -22,11 +23,13 @@ COMMANDS = (
 
 HELP_TEXT = """EFB Telegram 主端
 /link
-    将远程会话绑定至一个空的 Telegram 群组，可附加正则表达式筛选结果。
+    绑定远程会话至一个空的 Telegram 群组，可附加正则表达式筛选结果。
 /chat
     创建会话入口以开始聊天，可附加正则表达式筛选结果。
-/extra
-    列出微信端提供的附加功能。
+/login
+    获取微信登录二维码。
+/wechat
+    打开微信登录、退出和自动恢复管理面板。
 /unlink_all
     解除当前群组中的全部远程会话绑定。
 /info
@@ -81,7 +84,7 @@ def change_summary(initial_mask, state):
 
     if not changes:
         return "微信自动恢复设置已完成\n\n本次未更改任何设置。"
-    return "微信自动恢复设置已完成\n\n本次更改：\n" + "\n".join(changes)
+    return "微信自动恢复本次设置已完成\n\n本次更改：\n" + "\n".join(changes)
 
 
 def keyboard(state, initial_mask=None):

@@ -154,6 +154,9 @@ class CommandsManager(LocaleMixin):
         Show list of additional features and their usage.
         Triggered by `/extra`.
         """
+        if hasattr(self.channel, "wechat_control"):
+            return self.channel.wechat_control.show(update, context)
+
         assert isinstance(update, Update)
         assert update.effective_chat
 
@@ -254,7 +257,7 @@ class CommandsManager(LocaleMixin):
             parse_mode = "HTML"
 
         msg = self.bot.send_message(update.message.chat.id,
-                                    prefix=header, text=self._("Please wait..."), parse_mode=parse_mode)
+                                    prefix=header, text="正在处理，请稍候……", parse_mode=parse_mode)
 
         assert update.message.text
         result = functions[ExtraCommandName(groupdict['command'])](
