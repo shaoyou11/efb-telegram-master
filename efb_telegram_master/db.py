@@ -386,6 +386,14 @@ class DatabaseManager:
             associations.setdefault(item.master_uid, []).append(item.slave_uid)
         return associations
 
+    @staticmethod
+    def get_all_topic_assocs() -> Dict[TelegramChatID, List[EFBChannelChatIDStr]]:
+        associations: Dict[TelegramChatID, List[EFBChannelChatIDStr]] = {}
+        for item in TopicAssoc.select(TopicAssoc.topic_chat_id, TopicAssoc.slave_uid):
+            chat_id = TelegramChatID(int(item.topic_chat_id))
+            associations.setdefault(chat_id, []).append(item.slave_uid)
+        return associations
+
     def add_topic_assoc(self, topic_chat_id: TelegramChatID,
                        message_thread_id: EFBChannelChatIDStr,
                        slave_uid: EFBChannelChatIDStr, ):

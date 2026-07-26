@@ -597,9 +597,10 @@ class ChatBindingManager(LocaleMixin):
         if chat_uid not in links:
             links.append(chat_uid)
         self.channel.watchdog_control.refresh_group_menu(tg_chat_to_link.id, links)
-        self.db.remove_topic_assoc(
-            slave_uid=chat_uid,
-        )
+        old_topics = self.db.get_topic_assocs(chat_uid)
+        self.db.remove_topic_assoc(slave_uid=chat_uid)
+        for topic_chat_id, _ in old_topics:
+            self.channel.watchdog_control.refresh_group_menu(topic_chat_id)
 
         if tg_chat_to_link.is_forum:
             thread_id = self.create_topic(slave_uid=chat_uid, telegram_chat_id=TelegramChatID(tg_chat_to_link.id))
@@ -1098,6 +1099,8 @@ class ChatBindingManager(LocaleMixin):
                             message_thread_id=topic.message_thread_id,
                             slave_uid=slave_uid,
                         )
+                        if hasattr(self.channel, "watchdog_control"):
+                            self.channel.watchdog_control.refresh_group_menu(telegram_chat_id)
                     except Exception as e:
                         self.logger.info('Failed to create topic, Reason: %s', e)
         return thread_id

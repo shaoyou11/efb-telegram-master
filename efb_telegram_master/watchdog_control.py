@@ -191,17 +191,28 @@ class WatchdogControl:
         return tuple(commands)
 
     def refresh_linked_group_menus(self):
+        group_links = {}
         for master_uid, links in self.channel.db.get_all_chat_assocs().items():
             _, chat_uid, _ = utils.chat_id_str_to_id(master_uid)
-            self.refresh_group_menu(int(chat_uid), links)
+            group_links.setdefault(int(chat_uid), []).extend(links)
+        for chat_id, links in self.channel.db.get_all_topic_assocs().items():
+            group_links.setdefault(int(chat_id), []).extend(links)
+        for chat_id, links in group_links.items():
+            self.refresh_group_menu(chat_id, links)
+
+    def get_group_links(self, chat_id):
+        master_uid = utils.chat_id_to_str(self.channel.channel_id, ChatID(str(chat_id)))
+        links = list(self.channel.db.get_chat_assoc(master_uid=master_uid))
+        topic_links = self.channel.db.get_topic_slaves(topic_chat_id=chat_id) or []
+        links.extend(slave_uid for slave_uid, _ in topic_links)
+        return links
 
     def refresh_group_menu(self, chat_id, links=None):
         try:
             bot = self.channel.bot_manager.updater.bot
             scope = BotCommandScopeChat(chat_id)
             if links is None:
-                master_uid = utils.chat_id_to_str(self.channel.channel_id, ChatID(str(chat_id)))
-                links = self.channel.db.get_chat_assoc(master_uid=master_uid)
+                links = self.get_group_links(chat_id)
             if links:
                 bot.set_my_commands(
                     self.as_bot_commands(self.commands_for_links(links)),

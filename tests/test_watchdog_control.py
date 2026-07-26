@@ -138,3 +138,30 @@ def test_comwechat_group_link_adds_group_only_commands():
 
     assert set(dict(COMWECHAT_COMMANDS)).issubset(commands)
     assert set(dict(COMWECHAT_GROUP_COMMANDS)).issubset(commands)
+
+
+def test_topic_links_are_included_when_refreshing_forum_group_menu():
+    group_link = utils.chat_id_to_str(
+        "honus.comwechat",
+        ChatID("123456@chatroom"),
+    )
+
+    class FakeDB:
+        @staticmethod
+        def get_chat_assoc(master_uid):
+            return []
+
+        @staticmethod
+        def get_topic_slaves(topic_chat_id):
+            return [(group_link, 123)]
+
+    watchdog = WatchdogControl.__new__(WatchdogControl)
+    watchdog.channel = type("Channel", (), {
+        "channel_id": "blueset.telegram",
+        "db": FakeDB(),
+    })()
+
+    assert watchdog.get_group_links(-100123) == [group_link]
+    commands = dict(watchdog.commands_for_links(watchdog.get_group_links(-100123)))
+    assert "getmemberlist" in commands
+    assert "at" in commands

@@ -141,6 +141,8 @@ class SlaveMessageProcessor(LocaleMixin):
                     msg = kwargs.get('msg')
 
                     self.db.remove_topic_assoc(topic_chat_id=tg_dest, message_thread_id=message_thread_id)
+                    if hasattr(self.channel, "watchdog_control"):
+                        self.channel.watchdog_control.refresh_group_menu(tg_dest)
                     if msg.file and getattr(msg.file, 'closed', False) and msg.path:
                         msg.file = open(msg.path, 'rb')
                     return fn(*args, msg=msg, tg_dest=tg_dest, message_thread_id=message_thread_id, **kwargs)
