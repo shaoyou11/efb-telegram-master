@@ -27,6 +27,52 @@ EFB Telegram Master Channel (ETM)
 ETM is a Telegram Master Channel for EH Forwarder Bot, based on Telegram
 Bot API, ``python-telegram-bot``.
 
+shaoyou11 中文增强
+-------------------
+
+本分支用于 ``shaoyou11`` 的 EFB Docker 镜像，在上游 ETM 基础上增加中文命令菜单、本地 Telegram Bot API
+大文件适配、微信登录管理面板、Watchdog 控制、会话标题修复及其他家庭 NAS 环境所需功能。
+
+常用命令：
+
+.. list-table::
+   :header-rows: 1
+
+   * - 命令
+     - 作用
+   * - ``/login``
+     - 直接获取微信登录二维码；已经登录时提示登录成功。
+   * - ``/wechat``
+     - 打开中文微信管理面板，可重新扫码、强制退出或进入自动恢复设置。
+   * - ``/watchdog``
+     - 管理自动恢复总开关、全天事件恢复和凌晨自主检测。
+   * - ``/chat``
+     - 创建会话入口，可附加关键词或正则表达式筛选。
+   * - ``/link``
+     - 将微信会话绑定至 Telegram 群组。
+   * - ``/unlink_all``
+     - 解除当前群组中的全部远程会话绑定。
+   * - ``/info``
+     - 查看当前 Telegram 会话信息。
+   * - ``/update_info``
+     - 更新已绑定 Telegram 群组的信息。
+   * - ``/react``
+     - 回应消息或查看回应者。
+   * - ``/rm``
+     - 删除远程会话中的对应消息。
+   * - ``/help``
+     - 显示中文命令列表。
+
+兼容说明：
+
+- ``/extra`` 继续保留，当前会打开 ``/wechat`` 中文管理面板。
+- ``/0_reauth`` 和 ``/h_0_reauth`` 继续由 EFB 旧附加功能路由处理，但不再显示在菜单中。
+- 新命令按固定频道 ID 查找 ComWechat，不依赖可能变化的动态模块序号。
+- 新增微信管理入口只处理配置文件 ``admins`` 中的管理员请求。
+
+启用本地 Bot API 后，本分支会跳过 ETM 对公网 Bot API 默认文件大小的提前拦截；实际传输能力仍取决于
+本地 Bot API、Telegram 服务端、存储空间和网络状况。
+
 Requirements
 ------------
 
@@ -146,7 +192,9 @@ to BotFather for a command list::
     unlink_all - Unlink all remote chats from a group.
     info - Display information of the current Telegram chat.
     chat - Generate a chat head.
-    extra - Access additional features from Slave Channels.
+    login - Get the WeChat login QR code.
+    wechat - Open the WeChat management panel.
+    watchdog - Manage WeChat automatic recovery.
     update_info - Update info of linked Telegram group.
     react - Send a reaction to a message, or show a list of reactors.
     rm - Remove a message from its remote chat.
