@@ -2,8 +2,14 @@ import inspect
 
 from efb_telegram_master import TelegramChannel
 from efb_telegram_master.watchdog_control import (
+    COMWECHAT_COMMANDS,
+    COMWECHAT_GROUP_COMMANDS,
     COMMANDS,
     HELP_TEXT,
+    LINKED_GROUP_COMMANDS,
+    PRIVATE_COMMANDS,
+    UNLINKED_GROUP_COMMANDS,
+    WatchdogControl,
     change_summary,
     format_status,
     keyboard,
@@ -25,18 +31,15 @@ def test_format_status_shows_master_and_independent_switches():
 
 
 def test_all_command_descriptions_are_chinese():
-    descriptions = dict(COMMANDS)
+    descriptions = dict(PRIVATE_COMMANDS)
 
     assert descriptions == {
         "help": "显示命令列表。",
-        "link": "绑定远程会话至群组。",
-        "unlink_all": "解除群组中的全部远程会话。",
         "info": "显示当前 Telegram 会话信息。",
         "chat": "创建会话入口。",
         "login": "获取微信登录二维码。",
         "wechat": "管理微信登录与自动恢复。",
         "watchdog": "管理微信自动恢复开关。",
-        "update_info": "更新已绑定群组信息。",
         "react": "回应消息或查看回应者。",
         "rm": "删除远程会话中的消息。",
     }
@@ -97,3 +100,39 @@ def test_change_summary_reports_no_changes():
     }
 
     assert "本次未更改任何设置" in change_summary(5, current)
+
+
+def test_unlinked_group_menu_only_contains_telegram_group_commands():
+    commands = dict(UNLINKED_GROUP_COMMANDS)
+
+    assert "link" in commands
+    assert "unlink_all" not in commands
+    assert "update_info" not in commands
+    assert "login" not in commands
+    assert "getmemberlist" not in commands
+
+
+def test_linked_group_menu_adds_binding_commands():
+    commands = dict(LINKED_GROUP_COMMANDS)
+
+    assert "unlink_all" in commands
+    assert "update_info" in commands
+
+
+def test_comwechat_private_link_adds_only_general_session_commands():
+    commands = dict(WatchdogControl.commands_for_links(
+        ["honus.comwechat.wxid_example"]
+    ))
+
+    assert set(dict(COMWECHAT_COMMANDS)).issubset(commands)
+    assert "getmemberlist" not in commands
+    assert "changename" not in commands
+
+
+def test_comwechat_group_link_adds_group_only_commands():
+    commands = dict(WatchdogControl.commands_for_links(
+        ["honus.comwechat.123456@chatroom"]
+    ))
+
+    assert set(dict(COMWECHAT_COMMANDS)).issubset(commands)
+    assert set(dict(COMWECHAT_GROUP_COMMANDS)).issubset(commands)

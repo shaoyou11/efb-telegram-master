@@ -379,6 +379,13 @@ class DatabaseManager:
         except DoesNotExist:
             return []
 
+    @staticmethod
+    def get_all_chat_assocs() -> Dict[EFBChannelChatIDStr, List[EFBChannelChatIDStr]]:
+        associations: Dict[EFBChannelChatIDStr, List[EFBChannelChatIDStr]] = {}
+        for item in ChatAssoc.select(ChatAssoc.master_uid, ChatAssoc.slave_uid):
+            associations.setdefault(item.master_uid, []).append(item.slave_uid)
+        return associations
+
     def add_topic_assoc(self, topic_chat_id: TelegramChatID,
                        message_thread_id: EFBChannelChatIDStr,
                        slave_uid: EFBChannelChatIDStr, ):

@@ -544,6 +544,11 @@ class TelegramChannel(MasterChannel):
                 self.db.remove_chat_assoc(slave_uid=i)
                 self.db.add_chat_assoc(master_uid=etm_utils.chat_id_to_str(self.channel_id, ChatID(str(new_id))), slave_uid=i)
                 count += 1
+            self.watchdog_control.refresh_group_menu(int(old_id), [])
+            new_links = self.db.get_chat_assoc(
+                master_uid=etm_utils.chat_id_to_str(self.channel_id, ChatID(str(new_id)))
+            )
+            self.watchdog_control.refresh_group_menu(new_id, new_links)
             self.bot_manager.send_message(
                 new_id, self.ngettext("Chat migration detected.\n"
                                       "All {count} remote chat are now linked to this new group.",

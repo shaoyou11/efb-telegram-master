@@ -2,23 +2,60 @@ import logging
 import os
 
 import requests
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from ehforwarderbot.types import ChatID
+from telegram import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.ext import CallbackContext, CallbackQueryHandler, CommandHandler
+
+from . import utils
 
 
 LOGGER = logging.getLogger(__name__)
-COMMANDS = (
+PRIVATE_COMMANDS = (
     ("help", "显示命令列表。"),
-    ("link", "绑定远程会话至群组。"),
-    ("unlink_all", "解除群组中的全部远程会话。"),
     ("info", "显示当前 Telegram 会话信息。"),
     ("chat", "创建会话入口。"),
     ("login", "获取微信登录二维码。"),
     ("wechat", "管理微信登录与自动恢复。"),
     ("watchdog", "管理微信自动恢复开关。"),
-    ("update_info", "更新已绑定群组信息。"),
     ("react", "回应消息或查看回应者。"),
     ("rm", "删除远程会话中的消息。"),
+)
+UNLINKED_GROUP_COMMANDS = (
+    ("help", "显示命令列表。"),
+    ("link", "为本群绑定远程会话。"),
+    ("info", "显示本群的绑定信息。"),
+)
+LINKED_GROUP_COMMANDS = UNLINKED_GROUP_COMMANDS + (
+    ("unlink_all", "解除本群的全部远程会话。"),
+    ("chat", "创建已绑定会话入口。"),
+    ("update_info", "更新本群名称和头像。"),
+    ("react", "回应消息或查看回应者。"),
+    ("rm", "删除远程会话中的消息。"),
+)
+COMWECHAT_COMMANDS = (
+    ("helpcomwechat", "显示当前微信会话可用命令。"),
+    ("search", "按昵称搜索微信联系人。"),
+    ("sendcard", "向当前会话发送联系人名片。"),
+    ("addfriend", "发送微信好友申请。"),
+    ("getstaticinfo", "查看微信联系人与群聊缓存。"),
+    ("forward", "生成跨会话转发信息。"),
+)
+COMWECHAT_GROUP_COMMANDS = (
+    ("addtogroup", "将指定微信用户加入当前群聊。"),
+    ("getmemberlist", "列出当前微信群成员。"),
+    ("at", "在微信群中提醒指定成员。"),
+    ("changename", "修改当前微信群名称。"),
+)
+COMMANDS = PRIVATE_COMMANDS + tuple(
+    command for command in LINKED_GROUP_COMMANDS if command[0] not in dict(PRIVATE_COMMANDS)
 )
 
 HELP_TEXT = """EFB Telegram 主端
@@ -116,11 +153,60 @@ class WatchdogControl:
 
     def update_command_menu(self):
         try:
-            self.channel.bot_manager.updater.bot.set_my_commands(
-                [BotCommand(command, description) for command, description in COMMANDS]
+            bot = self.channel.bot_manager.updater.bot
+            bot.set_my_commands(
+                self.as_bot_commands(PRIVATE_COMMANDS),
+                scope=BotCommandScopeAllPrivateChats(),
             )
+            bot.set_my_commands(
+                self.as_bot_commands(UNLINKED_GROUP_COMMANDS),
+                scope=BotCommandScopeAllGroupChats(),
+            )
+            self.refresh_linked_group_menus()
         except Exception as error:
             LOGGER.warning("failed to update Telegram command menu: %s", error)
+
+    @staticmethod
+    def as_bot_commands(commands):
+        return [BotCommand(command, description) for command, description in commands]
+
+    @staticmethod
+    def commands_for_links(links):
+        commands = list(LINKED_GROUP_COMMANDS)
+        has_comwechat = any(link.startswith("honus.comwechat.") for link in links)
+        has_comwechat_group = any(
+            link.startswith("honus.comwechat.") and link.endswith("@chatroom")
+            for link in links
+        )
+        if has_comwechat:
+            commands.extend(COMWECHAT_COMMANDS)
+        if has_comwechat_group:
+            commands.extend(COMWECHAT_GROUP_COMMANDS)
+        return tuple(commands)
+
+    def refresh_linked_group_menus(self):
+        for master_uid, links in self.channel.db.get_all_chat_assocs().items():
+            _, chat_uid, _ = utils.chat_id_str_to_id(master_uid)
+            self.refresh_group_menu(int(chat_uid), links)
+
+    def refresh_group_menu(self, chat_id, links=None):
+        try:
+            bot = self.channel.bot_manager.updater.bot
+            scope = BotCommandScopeChat(chat_id)
+            if links is None:
+                master_uid = utils.chat_id_to_str(self.channel.channel_id, ChatID(str(chat_id)))
+                links = self.channel.db.get_chat_assoc(master_uid=master_uid)
+            if links:
+                bot.set_my_commands(
+                    self.as_bot_commands(self.commands_for_links(links)),
+                    scope=scope,
+                )
+            else:
+                bot.delete_my_commands(scope=scope)
+            return True
+        except Exception as error:
+            LOGGER.warning("failed to refresh command menu for Telegram chat %s: %s", chat_id, error)
+            return False
 
     def get_state(self):
         response = requests.get(f"{self.url}/status", timeout=5)

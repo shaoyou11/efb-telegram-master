@@ -588,6 +588,15 @@ class ChatBindingManager(LocaleMixin):
         msg = self.bot.send_message(tg_chat_to_link.id, text=txt)
 
         chat.link(self.channel.channel_id, ChatID(str(tg_chat_to_link.id)), self.channel.flag("multiple_slave_chats"))
+        links = self.db.get_chat_assoc(
+            master_uid=utils.chat_id_to_str(
+                self.channel.channel_id,
+                ChatID(str(tg_chat_to_link.id)),
+            )
+        )
+        if chat_uid not in links:
+            links.append(chat_uid)
+        self.channel.watchdog_control.refresh_group_menu(tg_chat_to_link.id, links)
         self.db.remove_topic_assoc(
             slave_uid=chat_uid,
         )
@@ -629,6 +638,7 @@ class ChatBindingManager(LocaleMixin):
             else:
                 self.db.remove_chat_assoc(master_uid=utils.chat_id_to_str(self.channel.channel_id,
                                                                           ChatID(str(update.message.chat.id))))
+                self.channel.watchdog_control.refresh_group_menu(update.message.chat.id, [])
                 return self.bot.send_message(update.message.chat.id,
                                              self.ngettext("All {0} chat has been unlinked from this group.",
                                                            "All {0} chats has been unlinked from this group.",
@@ -646,6 +656,7 @@ class ChatBindingManager(LocaleMixin):
                 else:
                     self.db.remove_chat_assoc(
                         master_uid=utils.chat_id_to_str(self.channel.channel_id, ChatID(str(forwarded_chat.id))))
+                    self.channel.watchdog_control.refresh_group_menu(forwarded_chat.id, [])
                     return self.bot.send_message(update.message.chat.id,
                                                  self.ngettext("All {0} chat has been unlinked from this channel.",
                                                                "All {0} chats has been unlinked from this channel.",
@@ -1007,6 +1018,7 @@ class ChatBindingManager(LocaleMixin):
         if message.left_chat_member is not None and message.left_chat_member.id == self.bot.me.id:
             chat_id = ChatID(str(message.chat.id))
             self.db.remove_chat_assoc(master_uid=utils.chat_id_to_str(self.channel.channel_id, chat_id))
+            self.channel.watchdog_control.refresh_group_menu(message.chat.id, [])
 
     def update_thread_info(self, update: Update, context: CallbackContext):
         assert isinstance(update, Update)
@@ -1115,9 +1127,12 @@ class ChatBindingManager(LocaleMixin):
     def chat_migration_by_id(self, from_id, to_id):
         from_str = utils.chat_id_to_str(self.channel.channel_id, from_id)
         to_str = utils.chat_id_to_str(self.channel.channel_id, to_id)
-        for i in self.db.get_chat_assoc(master_uid=from_str):
+        links = self.db.get_chat_assoc(master_uid=from_str)
+        for i in links:
             self.db.add_chat_assoc(master_uid=to_str, slave_uid=i, multiple_slave=True)
         self.db.remove_chat_assoc(master_uid=from_str)
+        self.channel.watchdog_control.refresh_group_menu(int(from_id), [])
+        self.channel.watchdog_control.refresh_group_menu(int(to_id), links)
 
     @staticmethod
     def truncate_ellipsis(text: str, length: int) -> str:
