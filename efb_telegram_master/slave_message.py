@@ -451,6 +451,12 @@ class SlaveMessageProcessor(LocaleMixin):
     IMG_SIZE_MAX_RATIO = 10
     """Threshold of aspect ratio (longer side to shorter side) to send as file, used alone."""
 
+    @staticmethod
+    def force_image_document(msg: Message) -> bool:
+        vendor_specific = getattr(msg, "vendor_specific", {}) or {}
+        comwechat_info = vendor_specific.get("comwechat_info", {}) or {}
+        return bool(comwechat_info.get("force_send_as_file"))
+
     def slave_message_image(self, msg: Message, tg_dest: TelegramChatID,
                             thread_id: Optional[TelegramTopicID], msg_template: str, reactions: str,
                             old_msg_id: OldMsgID = None,
@@ -490,22 +496,25 @@ class SlaveMessageProcessor(LocaleMixin):
             #    send as file.
             # 3. If the picture is too thin -- aspect ratio grater than IMG_SIZE_MAX_RATIO, send as file.
 
-            try:
-                pic_img = Image.open(msg.path)
-                max_size = max(pic_img.size)
-                min_size = min(pic_img.size)
-                img_ratio = max_size / min_size
+            if self.force_image_document(msg):
+                send_as_file = True
+            else:
+                try:
+                    pic_img = Image.open(msg.path)
+                    max_size = max(pic_img.size)
+                    min_size = min(pic_img.size)
+                    img_ratio = max_size / min_size
 
-                if min_size > self.IMG_MIN_SIZE:
-                    send_as_file = True
-                elif max_size > self.IMG_MAX_SIZE and img_ratio > self.IMG_SIZE_RATIO:
-                    send_as_file = True
-                elif img_ratio >= self.IMG_SIZE_MAX_RATIO:
-                    send_as_file = True
-                else:
+                    if min_size > self.IMG_MIN_SIZE:
+                        send_as_file = True
+                    elif max_size > self.IMG_MAX_SIZE and img_ratio > self.IMG_SIZE_RATIO:
+                        send_as_file = True
+                    elif img_ratio >= self.IMG_SIZE_MAX_RATIO:
+                        send_as_file = True
+                    else:
+                        send_as_file = False
+                except IOError:  # Ignore when the image cannot be properly identified.
                     send_as_file = False
-            except IOError:  # Ignore when the image cannot be properly identified.
-                send_as_file = False
 
             file_too_large = self.check_file_size(msg.file)
             edit_media = msg.edit_media

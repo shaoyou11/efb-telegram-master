@@ -207,3 +207,21 @@ def test_format_text_message_template_blockquote(channel):
         processor.flag = original_flag
 
     assert result == "<blockquote>Alice:</blockquote>"
+
+
+def test_comwechat_original_image_is_forced_to_document():
+    message = SimpleNamespace(
+        vendor_specific={
+            "comwechat_info": {
+                "force_send_as_file": True,
+            },
+        },
+    )
+
+    assert SlaveMessageProcessor.force_image_document(message)
+
+
+def test_normal_image_is_not_forced_to_document():
+    message = SimpleNamespace(vendor_specific={})
+
+    assert not SlaveMessageProcessor.force_image_document(message)
