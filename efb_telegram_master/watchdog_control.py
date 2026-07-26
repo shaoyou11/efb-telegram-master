@@ -173,10 +173,16 @@ class WatchdogControl:
     @staticmethod
     def commands_for_links(links):
         commands = list(LINKED_GROUP_COMMANDS)
-        has_comwechat = any(link.startswith("honus.comwechat.") for link in links)
+        parsed_links = []
+        for link in links:
+            try:
+                parsed_links.append(utils.chat_id_str_to_id(link))
+            except (TypeError, ValueError):
+                LOGGER.warning("ignored malformed linked chat ID while building command menu")
+        has_comwechat = any(module_id == "honus.comwechat" for module_id, _, _ in parsed_links)
         has_comwechat_group = any(
-            link.startswith("honus.comwechat.") and link.endswith("@chatroom")
-            for link in links
+            module_id == "honus.comwechat" and str(chat_uid).endswith("@chatroom")
+            for module_id, chat_uid, _ in parsed_links
         )
         if has_comwechat:
             commands.extend(COMWECHAT_COMMANDS)

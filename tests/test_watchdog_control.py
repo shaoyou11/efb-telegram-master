@@ -1,6 +1,8 @@
 import inspect
 
+from ehforwarderbot.types import ChatID
 from efb_telegram_master import TelegramChannel
+from efb_telegram_master import utils
 from efb_telegram_master.watchdog_control import (
     COMWECHAT_COMMANDS,
     COMWECHAT_GROUP_COMMANDS,
@@ -121,7 +123,7 @@ def test_linked_group_menu_adds_binding_commands():
 
 def test_comwechat_private_link_adds_only_general_session_commands():
     commands = dict(WatchdogControl.commands_for_links(
-        ["honus.comwechat.wxid_example"]
+        [utils.chat_id_to_str("honus.comwechat", ChatID("wxid_example"))]
     ))
 
     assert set(dict(COMWECHAT_COMMANDS)).issubset(commands)
@@ -131,7 +133,7 @@ def test_comwechat_private_link_adds_only_general_session_commands():
 
 def test_comwechat_group_link_adds_group_only_commands():
     commands = dict(WatchdogControl.commands_for_links(
-        ["honus.comwechat.123456@chatroom"]
+        [utils.chat_id_to_str("honus.comwechat", ChatID("123456@chatroom"))]
     ))
 
     assert set(dict(COMWECHAT_COMMANDS)).issubset(commands)
