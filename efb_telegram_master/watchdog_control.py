@@ -25,6 +25,10 @@ PRIVATE_COMMANDS = (
     ("login", "获取微信登录二维码。"),
     ("wechat", "管理微信登录与自动恢复。"),
     ("watchdog", "管理微信自动恢复开关。"),
+    ("filter", "设置微信会话接收策略。"),
+    ("health", "查看 EFB 消息链路状态。"),
+    ("backup_info", "查看配置备份状态。"),
+    ("cleanup", "查看 EFB 存储占用。"),
     ("react", "回应消息或查看回应者。"),
     ("rm", "删除远程会话中的消息。"),
 )
@@ -37,6 +41,7 @@ LINKED_GROUP_COMMANDS = UNLINKED_GROUP_COMMANDS + (
     ("unlink_all", "解除本群的全部远程会话。"),
     ("chat", "创建已绑定会话入口。"),
     ("update_info", "更新本群名称和头像。"),
+    ("filter", "设置当前微信会话接收策略。"),
     ("react", "回应消息或查看回应者。"),
     ("rm", "删除远程会话中的消息。"),
 )
@@ -79,6 +84,20 @@ HELP_TEXT = """EFB Telegram 主端
     从远程会话中删除所回复的消息。
 /watchdog
     管理微信自动恢复的总开关、全天事件恢复和凌晨自主检测。
+/filter [关键词]
+    设置微信会话接收策略，或按关键词查找会话。
+/health
+    查看 EFB 服务与消息链路状态。
+/version
+    查看 EFB 组件版本。
+/backup_info
+    查看配置备份状态。
+/filetest
+    检查本地 Telegram Bot API 文件支持。
+/security
+    只扫描配置中的敏感键名，不显示内容。
+/cleanup
+    查看 EFB 存储占用和可手动清理路径。
 /help
     显示本命令列表。"""
 

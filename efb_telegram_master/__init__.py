@@ -14,7 +14,7 @@ import telegram.constants
 import telegram.error
 from PIL import Image, WebPImagePlugin
 from ruamel.yaml import YAML
-from telegram import Update, Message
+from telegram import Update, Message, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, CallbackQueryHandler, CallbackContext, Filters
 
 import ehforwarderbot  # lgtm [py/import-and-import-from]
@@ -36,7 +36,12 @@ from .chat_binding import ChatBindingManager
 from .chat_destination_cache import ChatDestinationCache
 from .chat_object_cache import ChatObjectCacheManager
 from .commands import CommandsManager
+from .cleanup import build_storage_text, load_storage_report, parse_cleanup_action
 from .db import DatabaseManager
+from .delivery_policy import DeliveryPolicyStore
+from .delivery_policy_ui import DeliveryPolicyUI
+from .operations_ui import OperationsUI
+from .delivery_telemetry import DeliveryGuard
 from .master_message import MasterMessageProcessor
 from .message import ETMMsg
 from .rpc_utils import RPCUtilities
@@ -125,11 +130,17 @@ class TelegramChannel(MasterChannel):
         self.flag: ExperimentalFlagsManager = ExperimentalFlagsManager(self)
         self.db: DatabaseManager = DatabaseManager(self)
         self.chat_manager: ChatObjectCacheManager = ChatObjectCacheManager(self)
+        self.delivery_policy_store = DeliveryPolicyStore(
+            efb_utils.get_config_path(self.channel_id).parent / "delivery-policies.json")
         self.chat_dest_cache: ChatDestinationCache = ChatDestinationCache(self.flag("send_to_last_chat"))
         self.bot_manager: TelegramBotManager = TelegramBotManager(self)
         self.commands: CommandsManager = CommandsManager(self)
         self.chat_binding: ChatBindingManager = ChatBindingManager(self)
+        self.delivery_policy_ui = DeliveryPolicyUI(self)
+        self.operations_ui = OperationsUI(self)
         self.slave_messages: SlaveMessageProcessor = SlaveMessageProcessor(self)
+        self.delivery_guard = DeliveryGuard(self.slave_messages.telemetry, self)
+        self.delivery_guard.start()
         self.topic_group: Optional[TelegramChatID] = TelegramChatID(self.flag('topic_group'))
 
         if not self.flag('auto_locale'):
@@ -145,6 +156,26 @@ class TelegramChannel(MasterChannel):
             CommandHandler("help", self.help, filters=non_edit_filter))
         self.bot_manager.dispatcher.add_handler(
             CommandHandler("info", self.info, filters=non_edit_filter))
+        self.bot_manager.dispatcher.add_handler(
+            CommandHandler("cleanup", self.cleanup, filters=non_edit_filter))
+        self.bot_manager.dispatcher.add_handler(
+            CallbackQueryHandler(self.cleanup_callback, pattern=r"^cleanup:"))
+        self.bot_manager.dispatcher.add_handler(
+            CommandHandler("filter", self.delivery_policy_ui.command, filters=non_edit_filter))
+        self.bot_manager.dispatcher.add_handler(
+            CallbackQueryHandler(self.delivery_policy_ui.callback, pattern=r"^filter:"))
+        for command, handler in (
+                ("health", self.operations_ui.health),
+                ("version", self.operations_ui.version),
+                ("backup_info", self.operations_ui.backup_info),
+                ("filetest", self.operations_ui.filetest),
+                ("security", self.operations_ui.security)):
+            self.bot_manager.dispatcher.add_handler(
+                CommandHandler(command, handler, filters=non_edit_filter))
+        self.bot_manager.dispatcher.add_handler(
+            CallbackQueryHandler(self.operations_ui.callback, pattern=r"^ops:"))
+        self.bot_manager.dispatcher.add_handler(
+            CallbackQueryHandler(self.slave_messages.retry_callback, pattern=r"^retry:"))
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.void_callback_handler, pattern="void"))
         self.watchdog_control = WatchdogControl(self)
@@ -223,6 +254,40 @@ class TelegramChannel(MasterChannel):
                 update.effective_message.reply_text(msg[x:x+4095])
         else:
             update.effective_message.reply_text(msg)
+
+    def cleanup(self, update: Update, context: CallbackContext):
+        if not update.effective_user or update.effective_user.id not in self.config['admins']:
+            return
+        self._render_cleanup(update)
+
+    def _render_cleanup(self, update: Update):
+        report = load_storage_report()
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("刷新占用", callback_data="cleanup:list"),
+            InlineKeyboardButton("关闭", callback_data="cleanup:close"),
+        ]])
+        text = build_storage_text(report)
+        if update.callback_query:
+            update.callback_query.edit_message_text(text, reply_markup=markup)
+        else:
+            update.effective_message.reply_text(text, reply_markup=markup)
+
+    def cleanup_callback(self, update: Update, context: CallbackContext):
+        query = update.callback_query
+        if not query or not update.effective_user or update.effective_user.id not in self.config['admins']:
+            if query:
+                query.answer("无权执行", show_alert=True)
+            return
+        action = parse_cleanup_action(query.data or "")
+        if action == "list":
+            query.answer()
+            self._render_cleanup(update)
+            return
+        if action == "close":
+            query.answer()
+            query.message.delete()
+            return
+        query.answer("无效操作", show_alert=True)
 
     def info_topic(self, update: Update):
         """Generate string for chat linking info of a topic."""

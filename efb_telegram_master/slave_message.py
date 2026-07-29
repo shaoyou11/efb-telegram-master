@@ -17,10 +17,13 @@ import pydub
 import telegram  # lgtm [py/import-and-import-from]
 import telegram.constants
 import telegram.error
+import secrets
+import time
 import telegram.ext
 from PIL import Image
 from telegram import InputFile, ChatAction, InputMediaAudio, InputMediaPhoto, InputMediaDocument, InputMediaVideo, InputMediaAnimation, \
-    InlineKeyboardMarkup, InlineKeyboardButton, ReplyMarkup, TelegramError, InputMedia
+    InlineKeyboardMarkup, InlineKeyboardButton, ReplyMarkup, TelegramError, InputMedia, Update
+from telegram.ext import CallbackContext
 
 from ehforwarderbot import Message, Status, coordinator
 from ehforwarderbot.chat import ChatNotificationState, SelfChatMember, GroupChat, PrivateChat, SystemChat, Chat
@@ -34,6 +37,9 @@ from .chat_object_cache import ChatObjectCacheManager
 from .chat_title_sync import should_auto_rename
 from .commands import ETMCommandMsgStorage
 from .constants import Emoji
+from .delivery_policy import DeliveryPolicy
+from .delivery_telemetry import DeliveryTelemetry, sanitize_failure
+from .failed_delivery import FailedDeliveryStore
 from .file_size_policy import exceeds_bot_api_limit
 from .locale_mixin import LocaleMixin
 from .message import ETMMsg
@@ -49,6 +55,10 @@ if TYPE_CHECKING:
 class SlaveMessageProcessor(LocaleMixin):
     """Process messages as Message objects from slave channels."""
 
+    DELIVERY_STATUS_KEY = "telegram_delivery_status"
+    DELIVERY_ERROR_KEY = "telegram_delivery_error"
+    DELIVERY_RETRY_COUNT = 3
+
     def __init__(self, channel: 'TelegramChannel'):
         self.channel: 'TelegramChannel' = channel
         self.bot: 'TelegramBotManager' = self.channel.bot_manager
@@ -57,6 +67,72 @@ class SlaveMessageProcessor(LocaleMixin):
         self.db: 'DatabaseManager' = channel.db
         self.chat_dest_cache: ChatDestinationCache = channel.chat_dest_cache
         self.chat_manager: ChatObjectCacheManager = channel.chat_manager
+        telemetry_path = Path(os.getenv("EFB_DELIVERY_STATE", "/data/operations/state/delivery.json"))
+        self.telemetry = DeliveryTelemetry(telemetry_path)
+        failed_path = Path(os.getenv(
+            "EFB_FAILED_DELIVERY_STATE",
+            "/data/operations/state/failed-deliveries.json",
+        ))
+        self.failure_store = FailedDeliveryStore(failed_path)
+        self.failed_messages = {}
+
+    def delivery_policy(self, msg: Message) -> DeliveryPolicy:
+        return self.channel.delivery_policy_store.get(utils.chat_id_to_str(chat=msg.chat))
+
+    @classmethod
+    def mark_delivery(cls, msg: Message, status: str, error: str = "") -> None:
+        vendor_specific = getattr(msg, "vendor_specific", None)
+        if not isinstance(vendor_specific, dict):
+            vendor_specific = {}
+        vendor_specific[cls.DELIVERY_STATUS_KEY] = status
+        if error:
+            vendor_specific[cls.DELIVERY_ERROR_KEY] = sanitize_failure(error)
+        else:
+            vendor_specific.pop(cls.DELIVERY_ERROR_KEY, None)
+        msg.vendor_specific = vendor_specific
+
+    @staticmethod
+    def prepare_file_retry(msg: Message) -> None:
+        if not msg.path:
+            return
+        if msg.file and not getattr(msg.file, "closed", False):
+            try:
+                msg.file.seek(0)
+                return
+            except (OSError, ValueError):
+                pass
+        msg.file = open(msg.path, "rb")
+
+    def dispatch_with_retry(self, **kwargs) -> None:
+        msg = kwargs["msg"]
+        for attempt in range(1, self.DELIVERY_RETRY_COUNT + 1):
+            try:
+                if attempt > 1:
+                    self.prepare_file_retry(msg)
+                self.dispatch_message(**kwargs)
+                return
+            except telegram.error.RetryAfter as error:
+                if attempt >= self.DELIVERY_RETRY_COUNT:
+                    raise
+                delay = max(1.0, float(error.retry_after))
+                self.logger.warning(
+                    "[%s] Telegram 限流，%.1f 秒后进行第 %s 次发送。",
+                    msg.uid,
+                    delay,
+                    attempt + 1,
+                )
+                time.sleep(delay)
+            except (telegram.error.TimedOut, telegram.error.NetworkError):
+                if attempt >= self.DELIVERY_RETRY_COUNT:
+                    raise
+                delay = float(attempt * 2)
+                self.logger.warning(
+                    "[%s] Telegram 网络异常，%.1f 秒后进行第 %s 次发送。",
+                    msg.uid,
+                    delay,
+                    attempt + 1,
+                )
+                time.sleep(delay)
 
     def is_silent(self, msg: Message) -> Optional[bool]:
         """Determine if a message shall be sent silently.
@@ -90,19 +166,54 @@ class SlaveMessageProcessor(LocaleMixin):
         Args:
             msg (Message): The message.
         """
+        tg_dest = None
+        thread_id = None
+        msg_template = ""
+        silent = False
+        size = 0
+        if msg.path:
+            try:
+                size = os.path.getsize(msg.path)
+            except OSError:
+                pass
+        self.telemetry.inbound(str(msg.uid), str(msg.type), size)
         try:
             xid = msg.uid
             self.logger.debug("[%s] Slave message delivered to ETM.\n%s", xid, msg)
+
+            policy = self.delivery_policy(msg)
+            if policy is DeliveryPolicy.FILTERED:
+                self.logger.debug("[%s] Message is not delivered per chat delivery policy.", xid)
+                self.telemetry.filtered(str(msg.uid))
+                self.mark_delivery(msg, "filtered")
+                return msg
+
+            if msg.type == MsgType.File and not msg.edit:
+                existing = self.db.get_msg_log(
+                    slave_msg_id=msg.uid,
+                    slave_origin_uid=utils.chat_id_to_str(chat=msg.chat),
+                )
+                if existing:
+                    self.logger.info("[%s] 文件已经发送，跳过重复投递。", xid)
+                    self.telemetry.delivered(str(msg.uid))
+                    self.mark_delivery(msg, "delivered")
+                    return msg
 
             msg_template, (tg_dest, thread_id) = self.get_slave_msg_dest(msg)
 
             silent = self.is_silent(msg)
             if silent is None:
                 self.logger.debug("[%s] Message is not delivered per silent settings.", xid)
+                self.telemetry.filtered(str(msg.uid))
+                self.mark_delivery(msg, "skipped")
                 return msg
+            if policy is DeliveryPolicy.SILENT:
+                silent = True
 
             if tg_dest is None:
                 self.logger.debug("[%s] Sender of the message is muted.", xid)
+                self.telemetry.filtered(str(msg.uid))
+                self.mark_delivery(msg, "skipped")
                 return msg
 
             # When editing message
@@ -121,11 +232,150 @@ class SlaveMessageProcessor(LocaleMixin):
                                      'but it does not exist in database. Sending new message instead.',
                                      msg.uid)
 
-            self.dispatch_message(msg=msg, msg_template=msg_template, old_msg_id=old_msg_id, tg_dest=tg_dest, thread_id=thread_id, silent=silent)
+            self.dispatch_with_retry(
+                msg=msg,
+                msg_template=msg_template,
+                old_msg_id=old_msg_id,
+                tg_dest=tg_dest,
+                thread_id=thread_id,
+                silent=silent,
+            )
+            self.telemetry.delivered(str(msg.uid))
+            self.mark_delivery(msg, "delivered")
         except Exception as e:
+            self.telemetry.failed(str(msg.uid), repr(e))
+            self.mark_delivery(msg, "failed", repr(e))
             self.logger.error("Error occurred while processing message from slave channel.\nMessage: %s\n%s\n%s",
                               repr(msg), repr(e), traceback.format_exc())
+            self._report_delivery_failure(
+                msg,
+                e,
+                tg_dest,
+                thread_id,
+                size,
+                msg_template,
+                silent,
+            )
         return msg
+
+    def _failure_record(self, msg, tg_dest, thread_id, msg_template, silent, error):
+        destination = tg_dest or self.channel.config["admins"][0]
+        return {
+            "uid": str(msg.uid),
+            "type": msg.type.name,
+            "path": str(msg.path),
+            "filename": msg.filename,
+            "mime": msg.mime,
+            "text": msg.text or "",
+            "chat": str(utils.chat_id_to_str(chat=msg.chat)),
+            "author_uid": str(msg.author.uid),
+            "tg_dest": int(destination),
+            "thread_id": int(thread_id) if thread_id is not None else None,
+            "msg_template": msg_template or "",
+            "silent": bool(silent),
+            "error": sanitize_failure(error),
+            "created_at": time.time(),
+            "expires": time.time() + 7 * 24 * 3600,
+        }
+
+    def _report_delivery_failure(self, msg, error, tg_dest, thread_id, size,
+                                 msg_template="", silent=False):
+        token = None
+        rows = []
+        if msg.path and os.path.isfile(msg.path):
+            token = secrets.token_hex(6)
+            record = self._failure_record(
+                msg,
+                tg_dest,
+                thread_id,
+                msg_template,
+                silent,
+                error,
+            )
+            self.failure_store.put(token, record)
+            self.failed_messages[token] = {"msg": msg, "expires": record["expires"]}
+            rows.append([InlineKeyboardButton("重新发送", callback_data=f"retry:{token}")])
+        rows.append([InlineKeyboardButton("关闭", callback_data="retry:close")])
+        text = ("EFB 消息转发失败\n\n"
+                f"类型：{msg.type}\n大小：{size / 1024 / 1024:.2f} MB\n"
+                f"原因：{sanitize_failure(error)}")
+        destination = tg_dest or self.channel.config["admins"][0]
+        self.bot.send_message(destination, text, message_thread_id=thread_id,
+                              reply_markup=InlineKeyboardMarkup(rows))
+
+    def _message_from_failure_record(self, record):
+        channel_id, chat_uid, _ = utils.chat_id_str_to_id(record["chat"])
+        channel = coordinator.get_module_by_id(channel_id)
+        chat = channel.get_chat(chat_uid)
+        author_uid = record["author_uid"]
+        if isinstance(chat, PrivateChat):
+            author = chat.self if str(chat.self.uid) == author_uid else chat.other
+        elif isinstance(chat, GroupChat):
+            author = chat.get_member(author_uid)
+        else:
+            author = chat.self
+
+        msg = Message()
+        msg.uid = record["uid"]
+        msg.type = MsgType[record["type"]]
+        msg.chat = chat
+        msg.author = author
+        msg.path = Path(record["path"])
+        msg.file = open(msg.path, "rb")
+        msg.filename = record.get("filename")
+        msg.mime = record.get("mime")
+        msg.text = record.get("text") or ""
+        return msg
+
+    def _retry_persisted(self, token: str, record) -> None:
+        msg = self._message_from_failure_record(record)
+        try:
+            self.dispatch_with_retry(
+                msg=msg,
+                msg_template=record.get("msg_template", ""),
+                old_msg_id=None,
+                tg_dest=TelegramChatID(record["tg_dest"]),
+                thread_id=(
+                    TelegramTopicID(record["thread_id"])
+                    if record.get("thread_id") is not None
+                    else None
+                ),
+                silent=bool(record.get("silent", False)),
+            )
+            self.telemetry.delivered(str(msg.uid))
+            self.mark_delivery(msg, "delivered")
+            self.failure_store.remove(token)
+            self.failed_messages.pop(token, None)
+        finally:
+            if msg.file and not msg.file.closed:
+                msg.file.close()
+
+    def retry_callback(self, update: Update, _context: CallbackContext):
+        query = update.callback_query
+        if not query or not query.data:
+            return
+        action = query.data.split(":", 1)[1]
+        if action == "close":
+            query.answer()
+            query.message.delete()
+            return
+        record = self.failure_store.get(action)
+        if not record:
+            query.answer("重试已失效，请等待微信重新发送。", show_alert=True)
+            return
+        if not os.path.isfile(record["path"]):
+            query.answer("原文件已不存在，无法重试。", show_alert=True)
+            return
+        query.answer("正在重新发送")
+        try:
+            self._retry_persisted(action, record)
+        except Exception as error:
+            self.logger.exception("持久化文件重试失败: token=%s", action)
+            query.message.reply_text(
+                f"重新发送失败：{sanitize_failure(error)}"
+            )
+            return
+        query.message.delete()
 
     @staticmethod
     def handle_topic_error(fn):
@@ -136,7 +386,7 @@ class SlaveMessageProcessor(LocaleMixin):
                 if "Message thread not found" in e.message:
                     self = args[0]
                     self.logger.warning("Message thread not found, removing binding and retrying.")
-                    message_thread_id = kwargs.pop('thread_id')
+                    message_thread_id = kwargs.get('thread_id')
                     tg_dest = kwargs.get('tg_dest')
                     msg = kwargs.get('msg')
 
@@ -145,7 +395,8 @@ class SlaveMessageProcessor(LocaleMixin):
                         self.channel.watchdog_control.refresh_group_menu(tg_dest)
                     if msg.file and getattr(msg.file, 'closed', False) and msg.path:
                         msg.file = open(msg.path, 'rb')
-                    return fn(*args, msg=msg, tg_dest=tg_dest, message_thread_id=message_thread_id, **kwargs)
+                    kwargs['thread_id'] = None
+                    return fn(*args, **kwargs)
                 else:
                     raise e
         return wrapper
