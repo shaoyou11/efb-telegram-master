@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 
@@ -18,7 +19,8 @@ def format_size(size):
     return f"{size / 1024**2:.2f} MB"
 
 
-def build_storage_text(report, host_root="/vol4/1000/docker/efb"):
+def build_storage_text(report, host_root=None):
+    host_root = host_root or os.getenv("EFB_HOST_ROOT", "/vol1/1000/docker/efb")
     storage = f"{host_root}/comwechat/Files/shaoyou11/FileStorage"
     return "\n".join([
         "EFB 存储占用",

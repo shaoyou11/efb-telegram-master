@@ -21,12 +21,41 @@ def test_failure_reason_is_redacted():
     assert "/private/file.jpg" not in result
 
 
+def test_failed_delivery_clears_pending_restart_marker(tmp_path):
+    path = tmp_path / "delivery.json"
+    telemetry = DeliveryTelemetry(path)
+    telemetry.inbound("message-1", "File", 100)
+
+    telemetry.failed("message-1", "network error")
+
+    state = json.loads(path.read_text())
+    assert state["pending"] is None
+    assert state["last_failure"]["uid"] == "message-1"
+
+
 def test_logged_out_wechat_never_restarts_stalled_delivery():
     state = {"pending": {"at": 100.0}}
     assert recovery_action(state, logged_in=False, now=1000.0, last_restart_at=0) == "alert"
 
 
 def test_logged_in_stall_restarts_once_then_obeys_cooldown():
-    state = {"pending": {"at": 100.0}}
+    state = {"pending": {"uid": "message-1", "at": 100.0}}
     assert recovery_action(state, logged_in=True, now=1000.0, last_restart_at=0) == "restart"
-    assert recovery_action(state, logged_in=True, now=1100.0, last_restart_at=1000.0) == "alert"
+    assert recovery_action(
+        state,
+        logged_in=True,
+        now=5000.0,
+        last_restart_at=1000.0,
+        last_restart_uid="message-1",
+    ) == "alert"
+
+
+def test_new_stalled_message_can_restart_after_global_cooldown():
+    state = {"pending": {"uid": "message-2", "at": 4000.0}}
+    assert recovery_action(
+        state,
+        logged_in=True,
+        now=5000.0,
+        last_restart_at=1000.0,
+        last_restart_uid="message-1",
+    ) == "restart"

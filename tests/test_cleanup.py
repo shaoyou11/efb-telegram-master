@@ -24,6 +24,22 @@ def test_build_storage_text_shows_usage_policy_and_host_paths():
     assert "谨慎删除" in text
 
 
+def test_build_storage_text_defaults_to_current_feiniu_volume(monkeypatch):
+    monkeypatch.delenv("EFB_HOST_ROOT", raising=False)
+    report = {
+        "cache": {"bytes": 0},
+        "sns_cache": {"bytes": 0},
+        "attachments": {"bytes": 0},
+        "backups": {"bytes": 0},
+        "backup_count": 0,
+    }
+
+    text = build_storage_text(report)
+
+    assert "/vol1/1000/docker/efb/backups" in text
+    assert "/vol4/" not in text
+
+
 def test_load_storage_report_reads_json_file():
     with TemporaryDirectory() as directory:
         report = Path(directory) / "report.json"

@@ -20,12 +20,15 @@ def sanitize_failure(value: str) -> str:
 
 
 def recovery_action(state: dict, logged_in: bool, now: float, last_restart_at: float,
-                    stall_seconds: int = 600, cooldown_seconds: int = 3600) -> str:
+                    last_restart_uid: str = "", stall_seconds: int = 600,
+                    cooldown_seconds: int = 3600) -> str:
     pending = state.get("pending") or {}
     started = pending.get("at")
     if not isinstance(started, (int, float)) or now - started < stall_seconds:
         return "none"
     if not logged_in:
+        return "alert"
+    if str(pending.get("uid") or "") == str(last_restart_uid or ""):
         return "alert"
     if last_restart_at and now - last_restart_at < cooldown_seconds:
         return "alert"
@@ -86,6 +89,8 @@ class DeliveryTelemetry:
         with self.lock:
             self.state["last_failure"] = {"uid": str(uid), "reason": sanitize_failure(reason),
                                           "at": time.time()}
+            if (self.state.get("pending") or {}).get("uid") == str(uid):
+                self.state["pending"] = None
             self._save()
 
 
@@ -101,7 +106,7 @@ class DeliveryGuard:
         try:
             return json.loads(self.state_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
-            return {"last_restart_at": 0}
+            return {"last_restart_at": 0, "last_restart_uid": ""}
 
     def _save_recovery_state(self, state):
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,22 +131,34 @@ class DeliveryGuard:
     def check_once(self, now=None):
         now = now or time.time()
         recovery = self._recovery_state()
-        action = recovery_action(self.telemetry.state, self._logged_in(), now,
-                                 recovery.get("last_restart_at", 0))
         pending = self.telemetry.state.get("pending") or {}
+        logged_in = self._logged_in()
+        action = recovery_action(
+            self.telemetry.state,
+            logged_in,
+            now,
+            recovery.get("last_restart_at", 0),
+            recovery.get("last_restart_uid", ""),
+        )
         key = (pending.get("uid"), action)
         if action == "none":
             self.last_alert_key = None
             return action
         if key != self.last_alert_key:
             if action == "restart":
-                self._alert("EFB 检测到消息链路卡住超过10分钟，将只重启一次 EFB；微信容器不会重启。")
+                self._alert("EFB 检测到消息链路卡住超过10分钟；本消息最多只重启一次 EFB，微信容器不会重启。")
             else:
-                suffix = "微信已退出，因此不会重启 EFB。" if not self._logged_in() else "处于1小时冷却期，不会重复重启。"
+                if not logged_in:
+                    suffix = "微信已退出，因此不会重启 EFB。"
+                elif str(pending.get("uid") or "") == str(recovery.get("last_restart_uid") or ""):
+                    suffix = "本消息已经尝试过一次恢复，不会再次重启。"
+                else:
+                    suffix = "处于1小时冷却期，不会重复重启。"
                 self._alert("EFB 检测到消息链路异常。" + suffix)
             self.last_alert_key = key
         if action == "restart":
             recovery["last_restart_at"] = now
+            recovery["last_restart_uid"] = str(pending.get("uid") or "")
             self._save_recovery_state(recovery)
         return action
 
