@@ -42,6 +42,11 @@ def test_all_command_descriptions_are_chinese():
         "login": "获取微信登录二维码。",
         "wechat": "管理微信登录与自动恢复。",
         "watchdog": "管理微信自动恢复开关。",
+        "filter": "设置微信会话接收策略。",
+        "status": "查看 EFB 综合运行状态。",
+        "health": "查看 EFB 消息链路状态。",
+        "backup_info": "查看配置备份状态。",
+        "cleanup": "查看 EFB 存储占用。",
         "react": "回应消息或查看回应者。",
         "rm": "删除远程会话中的消息。",
     }

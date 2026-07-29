@@ -1,12 +1,64 @@
+import json
 import os
 from pathlib import Path
 
 from efb_telegram_master.operations_ui import (
+    OperationsUI,
     _human_size,
     backup_summary,
+    format_timestamp,
+    load_json,
     redact_error,
     scan_sensitive_keys,
 )
+
+
+def test_load_json_rejects_invalid_content(tmp_path):
+    path = tmp_path / "report.json"
+    path.write_text("invalid", encoding="utf-8")
+    assert load_json(path) == {}
+
+
+def test_format_timestamp_handles_missing_value():
+    assert format_timestamp(None) == "暂无"
+
+
+def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
+    state = tmp_path / "operations/state"
+    state.mkdir(parents=True)
+    (tmp_path / "backups/config-1").mkdir(parents=True)
+    (state / "delivery.json").write_text(json.dumps({
+        "last_delivered_at": 1000,
+    }), encoding="utf-8")
+    (state / "health-guard.json").write_text(json.dumps({
+        "healthy": True,
+        "action": "healthy",
+    }), encoding="utf-8")
+    (tmp_path / "delivery-reconcile-latest.json").write_text(json.dumps({
+        "pending_count": 1,
+        "failed_count": 2,
+    }), encoding="utf-8")
+    (tmp_path / "database-audit-latest.json").write_text(json.dumps({
+        "healthy": True,
+    }), encoding="utf-8")
+    (tmp_path / "capacity-audit-latest.json").write_text(json.dumps({
+        "disk": {"free_percent": 75.5},
+    }), encoding="utf-8")
+    (tmp_path / "upstream-audit-latest.json").write_text(json.dumps({
+        "update_count": 3,
+    }), encoding="utf-8")
+
+    ui = OperationsUI.__new__(OperationsUI)
+    ui.data_root = Path(tmp_path)
+    monkeypatch.setattr(ui, "_wechat_login", lambda: "已登录")
+    monkeypatch.setattr(ui, "_bot_api", lambda: "正常")
+
+    text = ui.health_text()
+
+    assert "EFB 综合状态" in text
+    assert "待处理 1｜失败 2" in text
+    assert "NAS 磁盘剩余：75.50%" in text
+    assert "待评估上游更新：3 项" in text
 
 
 def test_backup_summary_reports_count_and_latest_without_file_content(tmp_path: Path):

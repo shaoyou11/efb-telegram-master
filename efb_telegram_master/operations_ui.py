@@ -85,6 +85,21 @@ def _package_version(name: str) -> str:
         return "未知"
 
 
+def load_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def format_timestamp(value) -> str:
+    try:
+        return datetime.fromtimestamp(float(value)).strftime("%m-%d %H:%M")
+    except (TypeError, ValueError, OSError):
+        return "暂无"
+
+
 class OperationsUI:
     def __init__(self, channel):
         self.channel = channel
@@ -126,27 +141,45 @@ class OperationsUI:
 
     def health_text(self) -> str:
         backup = backup_summary(self.data_root / "backups")
-        telemetry = self.data_root / "operations" / "state" / "delivery.json"
-        last_delivery = "暂无记录"
-        try:
-            data = json.loads(telemetry.read_text(encoding="utf-8"))
-            stamp = data.get("last_delivered_at") or data.get("last_inbound_at")
-            if stamp:
-                last_delivery = datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M:%S")
-        except (OSError, ValueError, TypeError):
-            pass
+        state_root = self.data_root / "operations" / "state"
+        delivery = load_json(state_root / "delivery.json")
+        health = load_json(state_root / "health-guard.json")
+        reconcile = load_json(self.data_root / "delivery-reconcile-latest.json")
+        database = load_json(self.data_root / "database-audit-latest.json")
+        capacity = load_json(self.data_root / "capacity-audit-latest.json")
+        upstream = load_json(self.data_root / "upstream-audit-latest.json")
+        last_delivery = format_timestamp(
+            delivery.get("last_delivered_at") or delivery.get("last_inbound_at")
+        )
+        stack_status = "正常" if health.get("healthy") else health.get("reason", "等待首次检查")
+        database_status = "正常" if database.get("healthy") else "等待检查或异常"
+        disk = capacity.get("disk") or {}
+        free_percent = disk.get("free_percent")
+        disk_text = f"{float(free_percent):.2f}%" if isinstance(free_percent, (int, float)) else "等待检查"
+        pending = reconcile.get("pending_count", 0)
+        failed = reconcile.get("failed_count", 0)
+        updates = upstream.get("update_count", 0)
         return (
-            "EFB 运行状态\n\n"
+            "EFB 综合状态\n\n"
             f"微信：{self._wechat_login()}\n"
             f"Telegram Bot API：{self._bot_api()}\n"
+            f"四容器与共享网络：{stack_status}\n"
+            f"最近恢复动作：{health.get('action', '暂无')}\n"
             f"最近消息活动：{last_delivery}\n"
+            f"投递队列：待处理 {pending}｜失败 {failed}\n"
+            f"映射数据库：{database_status}\n"
+            f"NAS 磁盘剩余：{disk_text}\n"
+            f"待评估上游更新：{updates} 项\n"
             f"配置备份：{backup['count']} 份\n"
-            f"持久化目录：{self.data_root}"
+            f"镜像版本：{os.getenv('EFB_IMAGE_REVISION', '未知')}"
         )
 
     def health(self, update: Update, _context: CallbackContext):
         if self._allowed(update):
-            self._send(update, self.health_text(), "health")
+            self._send(update, self.health_text(), "status")
+
+    def status(self, update: Update, context: CallbackContext):
+        self.health(update, context)
 
     def version(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):
@@ -208,6 +241,7 @@ class OperationsUI:
             return
         handlers = {
             "health": self.health,
+            "status": self.status,
             "backup": self.backup_info,
             "filetest": self.filetest,
             "security": self.security,

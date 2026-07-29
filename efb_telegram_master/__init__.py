@@ -165,6 +165,7 @@ class TelegramChannel(MasterChannel):
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.delivery_policy_ui.callback, pattern=r"^filter:"))
         for command, handler in (
+                ("status", self.operations_ui.status),
                 ("health", self.operations_ui.health),
                 ("version", self.operations_ui.version),
                 ("backup_info", self.operations_ui.backup_info),

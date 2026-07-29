@@ -26,6 +26,7 @@ PRIVATE_COMMANDS = (
     ("wechat", "管理微信登录与自动恢复。"),
     ("watchdog", "管理微信自动恢复开关。"),
     ("filter", "设置微信会话接收策略。"),
+    ("status", "查看 EFB 综合运行状态。"),
     ("health", "查看 EFB 消息链路状态。"),
     ("backup_info", "查看配置备份状态。"),
     ("cleanup", "查看 EFB 存储占用。"),
@@ -88,6 +89,8 @@ HELP_TEXT = """EFB Telegram 主端
     设置微信会话接收策略，或按关键词查找会话。
 /health
     查看 EFB 服务与消息链路状态。
+/status
+    查看容器、消息、数据库、容量、备份和上游更新综合状态。
 /version
     查看 EFB 组件版本。
 /backup_info

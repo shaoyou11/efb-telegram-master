@@ -313,6 +313,7 @@ def setup_telegram_bot_commands_list(data):
                 ("extra", _("Access additional features from Slave Channels.")),
                 ("cleanup", _("Show EFB storage usage and cleanup paths.")),
                 ("filter", _("Configure delivery policy for a remote chat.")),
+                ("status", _("Show comprehensive EFB operational status.")),
                 ("health", _("Show EFB service and message link status.")),
                 ("version", _("Show EFB component versions.")),
                 ("backup_info", _("Show configuration backup status.")),
