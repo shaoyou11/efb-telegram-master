@@ -36,20 +36,33 @@ def test_all_command_descriptions_are_chinese():
     descriptions = dict(PRIVATE_COMMANDS)
 
     assert descriptions == {
-        "help": "显示命令列表。",
-        "info": "显示当前 Telegram 会话信息。",
+        "status": "查看 EFB 综合运行状态。",
+        "watchdog": "管理微信自动恢复开关。",
+        "wechat": "管理微信登录与自动恢复。",
+        "filter": "设置微信会话接收策略。",
+        "cleanup": "查看 EFB 存储占用。",
+        "backup_info": "查看配置备份状态。",
         "chat": "创建会话入口。",
         "login": "获取微信登录二维码。",
-        "wechat": "管理微信登录与自动恢复。",
-        "watchdog": "管理微信自动恢复开关。",
-        "filter": "设置微信会话接收策略。",
-        "status": "查看 EFB 综合运行状态。",
-        "health": "查看 EFB 消息链路状态。",
-        "backup_info": "查看配置备份状态。",
-        "cleanup": "查看 EFB 存储占用。",
+        "info": "显示当前 Telegram 会话信息。",
+        "help": "显示命令列表。",
         "react": "回应消息或查看回应者。",
         "rm": "删除远程会话中的消息。",
     }
+    assert tuple(command for command, _ in PRIVATE_COMMANDS) == (
+        "status",
+        "watchdog",
+        "wechat",
+        "filter",
+        "cleanup",
+        "backup_info",
+        "chat",
+        "login",
+        "info",
+        "help",
+        "react",
+        "rm",
+    )
 
 
 def test_help_text_is_chinese_and_lists_all_commands():
@@ -59,7 +72,15 @@ def test_help_text_is_chinese_and_lists_all_commands():
     assert "EFB Telegram 主端" in HELP_TEXT
     assert "绑定远程会话" in HELP_TEXT
     assert "微信自动恢复" in HELP_TEXT
+    assert "/health" not in HELP_TEXT
     assert "Link a remote chat" not in HELP_TEXT
+
+
+def test_health_remains_a_hidden_compatibility_alias():
+    source = inspect.getsource(TelegramChannel.__init__)
+
+    assert '("health", self.operations_ui.health)' in source
+    assert "health" not in dict(PRIVATE_COMMANDS)
 
 
 def test_watchdog_callback_is_registered_before_session_expired_fallback():

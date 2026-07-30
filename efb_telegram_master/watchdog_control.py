@@ -19,17 +19,16 @@ from . import utils
 
 LOGGER = logging.getLogger(__name__)
 PRIVATE_COMMANDS = (
-    ("help", "显示命令列表。"),
-    ("info", "显示当前 Telegram 会话信息。"),
+    ("status", "查看 EFB 综合运行状态。"),
+    ("watchdog", "管理微信自动恢复开关。"),
+    ("wechat", "管理微信登录与自动恢复。"),
+    ("filter", "设置微信会话接收策略。"),
+    ("cleanup", "查看 EFB 存储占用。"),
+    ("backup_info", "查看配置备份状态。"),
     ("chat", "创建会话入口。"),
     ("login", "获取微信登录二维码。"),
-    ("wechat", "管理微信登录与自动恢复。"),
-    ("watchdog", "管理微信自动恢复开关。"),
-    ("filter", "设置微信会话接收策略。"),
-    ("status", "查看 EFB 综合运行状态。"),
-    ("health", "查看 EFB 消息链路状态。"),
-    ("backup_info", "查看配置备份状态。"),
-    ("cleanup", "查看 EFB 存储占用。"),
+    ("info", "显示当前 Telegram 会话信息。"),
+    ("help", "显示命令列表。"),
     ("react", "回应消息或查看回应者。"),
     ("rm", "删除远程会话中的消息。"),
 )
@@ -65,44 +64,42 @@ COMMANDS = PRIVATE_COMMANDS + tuple(
 )
 
 HELP_TEXT = """EFB Telegram 主端
-/link
-    绑定远程会话至一个空的 Telegram 群组，可附加正则表达式筛选结果。
+/status
+    查看容器、消息、数据库、容量、备份和上游更新综合状态。
+/watchdog
+    管理微信自动恢复的总开关、全天事件恢复和凌晨自主检测。
+/wechat
+    打开微信登录、退出和自动恢复管理面板。
+/filter [关键词]
+    设置微信会话接收策略，或按关键词查找会话。
+/cleanup
+    查看 EFB 存储占用和可手动清理路径。
+/backup_info
+    查看配置备份状态。
 /chat
     创建会话入口以开始聊天，可附加正则表达式筛选结果。
 /login
     获取微信登录二维码。
-/wechat
-    打开微信登录、退出和自动恢复管理面板。
-/unlink_all
-    解除当前群组中的全部远程会话绑定。
 /info
     显示当前 Telegram 会话信息。
+/help
+    显示本命令列表。
 /react [表情]
     回应一条消息，或查看已经回应的成员。
-/update_info
-    更新已绑定 Telegram 群组的信息，仅适用于机器人为管理员的单一绑定群组。
 /rm
     从远程会话中删除所回复的消息。
-/watchdog
-    管理微信自动恢复的总开关、全天事件恢复和凌晨自主检测。
-/filter [关键词]
-    设置微信会话接收策略，或按关键词查找会话。
-/health
-    查看 EFB 服务与消息链路状态。
-/status
-    查看容器、消息、数据库、容量、备份和上游更新综合状态。
+/link
+    绑定远程会话至一个空的 Telegram 群组，可附加正则表达式筛选结果。
+/unlink_all
+    解除当前群组中的全部远程会话绑定。
+/update_info
+    更新已绑定 Telegram 群组的信息，仅适用于机器人为管理员的单一绑定群组。
 /version
     查看 EFB 组件版本。
-/backup_info
-    查看配置备份状态。
 /filetest
     检查本地 Telegram Bot API 文件支持。
 /security
-    只扫描配置中的敏感键名，不显示内容。
-/cleanup
-    查看 EFB 存储占用和可手动清理路径。
-/help
-    显示本命令列表。"""
+    只扫描配置中的敏感键名，不显示内容。"""
 
 SETTINGS = (
     ("master", "总开关"),

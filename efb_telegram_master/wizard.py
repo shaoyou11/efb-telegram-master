@@ -305,23 +305,25 @@ def setup_telegram_bot_commands_list(data):
         print(_("Updating commands list..."), end="", flush=True)
         Bot(data.data['token'], request=data.request).set_my_commands(
             [
+                ("status", _("Show comprehensive EFB operational status.")),
+                ("watchdog", _("Manage WeChat automatic recovery.")),
+                ("wechat", _("Manage WeChat login and recovery.")),
+                ("filter", _("Configure delivery policy for a remote chat.")),
+                ("cleanup", _("Show EFB storage usage and cleanup paths.")),
+                ("backup_info", _("Show configuration backup status.")),
+                ("chat", _("Generate a chat head.")),
+                ("login", _("Get the WeChat login QR code.")),
+                ("info", _("Display information of the current Telegram chat.")),
                 ("help", _("Show commands list.")),
+                ("react", _("Send a reaction to a message, or show a list of reactors.")),
+                ("rm", _("Remove a message from its remote chat.")),
                 ("link", _("Link a remote chat to a group.")),
                 ("unlink_all", _("Unlink all remote chats from a group.")),
-                ("info", _("Display information of the current Telegram chat.")),
-                ("chat", _("Generate a chat head.")),
                 ("extra", _("Access additional features from Slave Channels.")),
-                ("cleanup", _("Show EFB storage usage and cleanup paths.")),
-                ("filter", _("Configure delivery policy for a remote chat.")),
-                ("status", _("Show comprehensive EFB operational status.")),
-                ("health", _("Show EFB service and message link status.")),
                 ("version", _("Show EFB component versions.")),
-                ("backup_info", _("Show configuration backup status.")),
                 ("filetest", _("Check local Telegram Bot API file support.")),
                 ("security", _("Scan configuration key names for sensitive fields.")),
                 ("update_info", _("Update info of linked Telegram group.")),
-                ("react", _("Send a reaction to a message, or show a list of reactors.")),
-                ("rm", _("Remove a message from its remote chat.")),
             ]
         )
 
