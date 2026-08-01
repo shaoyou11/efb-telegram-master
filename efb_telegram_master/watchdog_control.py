@@ -54,6 +54,7 @@ COMWECHAT_COMMANDS = (
     ("forward", "生成跨会话转发信息。"),
 )
 COMWECHAT_GROUP_COMMANDS = (
+    ("membercolor", "管理群成员头像主色标记。"),
     ("addtogroup", "将指定微信用户加入当前群聊。"),
     ("getmemberlist", "列出当前微信群成员。"),
     ("at", "在微信群中提醒指定成员。"),
