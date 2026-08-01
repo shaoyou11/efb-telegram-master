@@ -17,7 +17,7 @@ class AvatarColorMarkerTest(unittest.TestCase):
             long_name="苏晶晶 (Sue)",
             vendor_specific={"avatar_color_marker": "🟢"},
         )
-        self.assertEqual(member_name_with_avatar_marker(author), "🟢 苏晶晶 (Sue)")
+        self.assertEqual(member_name_with_avatar_marker(author), "苏晶晶 (Sue) 🟢")
 
 
     def test_missing_marker_keeps_original_member_name(self):
