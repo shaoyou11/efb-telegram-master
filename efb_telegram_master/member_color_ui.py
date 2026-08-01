@@ -12,9 +12,9 @@ LOGGER = logging.getLogger(__name__)
 
 def panel_text(enabled: bool, avatar_count: int, total_count: int) -> str:
     return (
-        f"群成员头像配色：{'已开启' if enabled else '已关闭'}\n"
-        f"已缓存：{total_count} 人（头像取色 {avatar_count} 人）\n"
-        "仅影响 Telegram 群聊成员名称前的标记。"
+        f"群成员个性图标：{'已开启' if enabled else '已关闭'}\n"
+        f"已记录：{total_count} 人\n"
+        "每位成员使用固定的小图标，仅影响 Telegram 群聊显示。"
     )
 
 
@@ -22,7 +22,7 @@ def panel_keyboard(enabled: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "关闭头像配色" if enabled else "开启头像配色",
+                "关闭个性图标" if enabled else "开启个性图标",
                 callback_data=f"membercolor:set:{'off' if enabled else 'on'}",
             ),
             InlineKeyboardButton("关闭页面", callback_data="membercolor:close"),
@@ -53,7 +53,7 @@ class MemberColorUI:
     def render(self, update: Update) -> None:
         store = self.marker_store()
         if store is None:
-            text = "群成员头像配色\n\n微信从端尚未就绪，请稍后重试。"
+            text = "群成员个性图标\n\n微信从端尚未就绪，请稍后重试。"
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("关闭页面", callback_data="membercolor:close")]
             ])
