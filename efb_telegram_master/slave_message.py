@@ -31,6 +31,8 @@ from ehforwarderbot.constants import MsgType
 from ehforwarderbot.message import LinkAttribute, LocationAttribute, MessageCommand, Reactions, \
     StatusAttribute
 from ehforwarderbot.status import ChatUpdates, MemberUpdates, MessageRemoval, MessageReactionsUpdate
+
+from .avatar_marker import member_name_with_avatar_marker
 from . import utils
 from .chat_destination_cache import ChatDestinationCache
 from .chat_object_cache import ChatObjectCacheManager
@@ -1479,7 +1481,7 @@ class SlaveMessageProcessor(LocaleMixin):
         msg_prefix = ""  # For group member name
         if isinstance(msg.chat, GroupChat):
             self.logger.debug("[%s] Message is from a group. Sender: %s", msg.uid, msg.author)
-            msg_prefix = msg.author.long_name
+            msg_prefix = member_name_with_avatar_marker(msg.author)
 
         if singly_linked:
             if msg_prefix:  # if group message
