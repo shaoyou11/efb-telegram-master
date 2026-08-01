@@ -32,6 +32,7 @@ from ehforwarderbot.types import ModuleID, InstanceID, MessageID, ReactionName, 
 from . import utils as etm_utils
 from .__version__ import __version__
 from .bot_manager import TelegramBotManager
+from .bridge_dead_letter import BridgeDeadLetterGuard
 from .chat_binding import ChatBindingManager
 from .chat_destination_cache import ChatDestinationCache
 from .chat_object_cache import ChatObjectCacheManager
@@ -183,6 +184,7 @@ class TelegramChannel(MasterChannel):
         self.watchdog_control = WatchdogControl(self)
         self.wechat_control = WeChatControl(self)
         self.member_color_ui = MemberColorUI(self)
+        self.bridge_dead_letter_guard = BridgeDeadLetterGuard(self)
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.bot_manager.session_expired))
         self.bot_manager.dispatcher.add_handler(
