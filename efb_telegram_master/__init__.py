@@ -43,6 +43,7 @@ from .delivery_policy_ui import DeliveryPolicyUI
 from .operations_ui import OperationsUI
 from .delivery_telemetry import DeliveryGuard
 from .master_message import MasterMessageProcessor
+from .member_color_ui import MemberColorUI
 from .message import ETMMsg
 from .rpc_utils import RPCUtilities
 from .slave_message import SlaveMessageProcessor
@@ -181,6 +182,7 @@ class TelegramChannel(MasterChannel):
             CallbackQueryHandler(self.void_callback_handler, pattern="void"))
         self.watchdog_control = WatchdogControl(self)
         self.wechat_control = WeChatControl(self)
+        self.member_color_ui = MemberColorUI(self)
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.bot_manager.session_expired))
         self.bot_manager.dispatcher.add_handler(

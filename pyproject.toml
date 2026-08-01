@@ -1,6 +1,6 @@
 [project]
 name = "efb-telegram-master"
-version = "2.3.2"
+version = "2.3.3"
 description = "Telegram Master Channel for EH Forwarder Bot, based on Telegram Bot API."
 authors = [
     {name = "jiz4oh", email = "git@jiz4oh.com"},
