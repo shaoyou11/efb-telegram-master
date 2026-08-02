@@ -33,6 +33,7 @@ from . import utils as etm_utils
 from .__version__ import __version__
 from .bot_manager import TelegramBotManager
 from .bridge_dead_letter import BridgeDeadLetterGuard
+from .author_name_spoiler import AuthorNameSpoilerStore, AuthorNameSpoilerUI
 from .chat_binding import ChatBindingManager
 from .chat_destination_cache import ChatDestinationCache
 from .chat_object_cache import ChatObjectCacheManager
@@ -134,6 +135,8 @@ class TelegramChannel(MasterChannel):
         self.chat_manager: ChatObjectCacheManager = ChatObjectCacheManager(self)
         self.delivery_policy_store = DeliveryPolicyStore(
             efb_utils.get_config_path(self.channel_id).parent / "delivery-policies.json")
+        self.author_name_spoiler_store = AuthorNameSpoilerStore(
+            efb_utils.get_config_path(self.channel_id).parent / "author-name-spoiler.json")
         self.chat_dest_cache: ChatDestinationCache = ChatDestinationCache(self.flag("send_to_last_chat"))
         self.bot_manager: TelegramBotManager = TelegramBotManager(self)
         self.commands: CommandsManager = CommandsManager(self)
@@ -184,6 +187,7 @@ class TelegramChannel(MasterChannel):
         self.watchdog_control = WatchdogControl(self)
         self.wechat_control = WeChatControl(self)
         self.member_color_ui = MemberColorUI(self)
+        self.author_name_spoiler_ui = AuthorNameSpoilerUI(self)
         self.bridge_dead_letter_guard = BridgeDeadLetterGuard(self)
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.bot_manager.session_expired))

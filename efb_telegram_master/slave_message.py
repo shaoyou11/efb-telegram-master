@@ -1471,7 +1471,8 @@ class SlaveMessageProcessor(LocaleMixin):
         if not msg_template:
             return ""
         author_text = html.escape(msg_template)
-        if author:
+        spoiler_store = getattr(self.channel, "author_name_spoiler_store", None)
+        if author and spoiler_store and spoiler_store.enabled:
             author_text = self.build_author_template_html(author, msg_template)
         if self.resolve_author_format() == "blockquote":
             return f"<blockquote>{author_text}</blockquote>"

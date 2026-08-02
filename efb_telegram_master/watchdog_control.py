@@ -23,6 +23,7 @@ PRIVATE_COMMANDS = (
     ("watchdog", "管理微信自动恢复开关。"),
     ("wechat", "管理微信登录与自动恢复。"),
     ("filter", "设置微信会话接收策略。"),
+    ("namespoiler", "设置群成员微信姓名隐藏。"),
     ("cleanup", "查看 EFB 存储占用。"),
     ("backup_info", "查看配置备份状态。"),
     ("chat", "创建会话入口。"),
@@ -73,6 +74,8 @@ HELP_TEXT = """EFB Telegram 主端
     打开微信登录、退出和自动恢复管理面板。
 /filter [关键词]
     设置微信会话接收策略，或按关键词查找会话。
+/namespoiler
+    设置 Telegram 群聊中群成员微信姓名是否折叠。
 /cleanup
     查看 EFB 存储占用和可手动清理路径。
 /backup_info

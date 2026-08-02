@@ -225,11 +225,23 @@ def test_build_inline_keyboard_existing_buttons(build_inline_keyboard, private):
     assert "__reactions__" in seq
 
 
-def test_format_text_message_template_with_alias_wraps_name_in_spoiler(channel):
+def test_format_text_message_template_shows_name_by_default(channel):
     processor = channel.slave_messages
     author = SimpleNamespace(alias="Alice", name="A", long_name="Alice (A)")
 
     result = processor.format_text_message_template("Alice (A):", author)
+
+    assert result == "<b>Alice (A):</b>"
+
+
+def test_format_text_message_template_can_hide_name_with_spoiler(channel):
+    processor = channel.slave_messages
+    author = SimpleNamespace(alias="Alice", name="A", long_name="Alice (A)")
+    processor.channel.author_name_spoiler_store.set_enabled(True)
+    try:
+        result = processor.format_text_message_template("Alice (A):", author)
+    finally:
+        processor.channel.author_name_spoiler_store.set_enabled(False)
 
     assert result == "<b>Alice (<tg-spoiler>A</tg-spoiler>):</b>"
 
