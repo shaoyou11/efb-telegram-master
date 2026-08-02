@@ -116,13 +116,31 @@ def switch_text(enabled):
     return "开启" if enabled else "关闭"
 
 
+def _duration_text(seconds):
+    try:
+        seconds = max(0, int(seconds))
+    except (TypeError, ValueError):
+        return "未知"
+    minutes, remainder = divmod(seconds, 60)
+    if minutes and remainder:
+        return f"{minutes}分{remainder}秒"
+    if minutes:
+        return f"{minutes}分钟"
+    return f"{remainder}秒"
+
+
 def format_status(state):
+    daily_start = state.get("daily_start", "02:50")
+    daily_end = state.get("daily_end", "03:50")
     return (
         "微信自动恢复监控\n\n"
         f"总开关：{switch_text(state['master_enabled'])}\n"
         f"全天事件恢复：{switch_text(state['event_enabled'])}\n"
         f"凌晨自主检测：{switch_text(state['night_enabled'])}\n"
-        "凌晨时段：02:50-03:50"
+        f"凌晨时段：{daily_start}-{daily_end}\n"
+        f"恢复配置：每{_duration_text(state.get('poll_seconds', 120))}检查｜"
+        f"冷却{_duration_text(state.get('click_cooldown_seconds', 120))}｜"
+        f"连续失败{state.get('max_recovery_failures', 3)}次暂停"
     )
 
 

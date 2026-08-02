@@ -32,6 +32,23 @@ def test_format_status_shows_master_and_independent_switches():
     assert "Watchdog" not in text
 
 
+def test_format_status_shows_runtime_recovery_configuration():
+    text = format_status({
+        "master_enabled": True,
+        "event_enabled": True,
+        "night_enabled": True,
+        "daily_start": "02:50",
+        "daily_end": "03:50",
+        "poll_seconds": 120,
+        "click_cooldown_seconds": 120,
+        "max_recovery_failures": 3,
+    })
+
+    assert "凌晨时段：02:50-03:50" in text
+    assert "每2分钟检查" in text
+    assert "连续失败3次暂停" in text
+
+
 def test_all_command_descriptions_are_chinese():
     descriptions = dict(PRIVATE_COMMANDS)
 

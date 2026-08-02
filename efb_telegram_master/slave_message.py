@@ -42,6 +42,7 @@ from .constants import Emoji
 from .delivery_policy import DeliveryPolicy
 from .delivery_telemetry import DeliveryTelemetry, sanitize_failure
 from .failed_delivery import FailedDeliveryStore
+from .failed_media import cleanup_failed_media, persist_failed_media
 from .file_size_policy import exceeds_bot_api_limit
 from .locale_mixin import LocaleMixin
 from .message import ETMMsg
@@ -76,6 +77,10 @@ class SlaveMessageProcessor(LocaleMixin):
             "/data/operations/state/failed-deliveries.json",
         ))
         self.failure_store = FailedDeliveryStore(failed_path)
+        self.failed_media_root = Path(os.getenv(
+            "EFB_FAILED_MEDIA_ROOT",
+            "/data/operations/failed-media",
+        ))
         self.failed_messages = {}
 
     def delivery_policy(self, msg: Message) -> DeliveryPolicy:
@@ -286,17 +291,32 @@ class SlaveMessageProcessor(LocaleMixin):
         rows = []
         if msg.path and os.path.isfile(msg.path):
             token = secrets.token_hex(6)
-            record = self._failure_record(
-                msg,
-                tg_dest,
-                thread_id,
-                msg_template,
-                silent,
-                error,
-            )
-            self.failure_store.put(token, record)
-            self.failed_messages[token] = {"msg": msg, "expires": record["expires"]}
-            rows.append([InlineKeyboardButton("重新发送", callback_data=f"retry:{token}")])
+            durable_path = None
+            try:
+                durable_path = persist_failed_media(
+                    msg.path,
+                    token,
+                    self.failed_media_root,
+                )
+                record = self._failure_record(
+                    msg,
+                    tg_dest,
+                    thread_id,
+                    msg_template,
+                    silent,
+                    error,
+                )
+                record["path"] = str(durable_path)
+                record["storage"] = "durable"
+                self.failure_store.put(token, record)
+            except Exception:
+                if durable_path is not None:
+                    cleanup_failed_media(durable_path, self.failed_media_root)
+                self.logger.exception("保存失败附件到持久目录失败: token=%s", token)
+            else:
+                self.failed_messages[token] = {"msg": msg, "expires": record["expires"]}
+                self.mark_delivery(msg, "stored_for_retry")
+                rows.append([InlineKeyboardButton("重新发送", callback_data=f"retry:{token}")])
         rows.append([InlineKeyboardButton("关闭", callback_data="retry:close")])
         text = ("EFB 消息转发失败\n\n"
                 f"类型：{msg.type}\n大小：{size / 1024 / 1024:.2f} MB\n"
@@ -347,6 +367,7 @@ class SlaveMessageProcessor(LocaleMixin):
             self.telemetry.delivered(str(msg.uid))
             self.mark_delivery(msg, "delivered")
             self.failure_store.remove(token)
+            cleanup_failed_media(record["path"], self.failed_media_root)
             self.failed_messages.pop(token, None)
         finally:
             if msg.file and not msg.file.closed:

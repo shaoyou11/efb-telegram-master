@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 from datetime import datetime
 from importlib import metadata
 from pathlib import Path
@@ -93,6 +94,57 @@ def load_json(path: Path) -> dict:
         return {}
 
 
+def _record_count(value) -> int:
+    if isinstance(value, (dict, list)):
+        return len(value)
+    return 0
+
+
+def delivery_summary(data_root: Path, reconcile: dict) -> dict:
+    state_root = data_root / "operations" / "state"
+    failed_records = load_json(state_root / "failed-deliveries.json")
+    pending_records = load_json(
+        data_root / "profiles" / "comwechat" / "honus.comwechat" / "pending-files.json"
+    )
+    try:
+        pending = max(0, int(reconcile.get("pending_count", 0)))
+    except (TypeError, ValueError):
+        pending = 0
+    try:
+        failed = max(0, int(reconcile.get("failed_count", 0)))
+    except (TypeError, ValueError):
+        failed = 0
+    pending = max(pending, _record_count(pending_records))
+    failed = max(failed, _record_count(failed_records))
+    persisted = sum(
+        1
+        for record in failed_records.values()
+        if isinstance(record, dict)
+        and (
+            record.get("storage") == "durable"
+            or str(record.get("path", "")).find("failed-media") >= 0
+        )
+    )
+    return {
+        "pending": pending,
+        "failed": failed,
+        "persisted_failed_media": persisted,
+    }
+
+
+def _duration_text(seconds) -> str:
+    try:
+        seconds = max(0, int(seconds))
+    except (TypeError, ValueError):
+        return "未知"
+    minutes, remainder = divmod(seconds, 60)
+    if minutes and remainder:
+        return f"{minutes}分{remainder}秒"
+    if minutes:
+        return f"{minutes}分钟"
+    return f"{remainder}秒"
+
+
 def format_timestamp(value) -> str:
     try:
         return datetime.fromtimestamp(float(value)).strftime("%m-%d %H:%M")
@@ -100,10 +152,29 @@ def format_timestamp(value) -> str:
         return "暂无"
 
 
+def format_uptime(started_at, now=None) -> str:
+    try:
+        elapsed = max(0, int((time.time() if now is None else now) - float(started_at)))
+    except (TypeError, ValueError, OSError):
+        return "暂无"
+    days, remainder = divmod(elapsed, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes = remainder // 60
+    parts = []
+    if days:
+        parts.append(f"{days}天")
+    if hours or days:
+        parts.append(f"{hours}小时")
+    if minutes or not parts:
+        parts.append(f"{minutes}分钟")
+    return " ".join(parts)
+
+
 class OperationsUI:
     def __init__(self, channel):
         self.channel = channel
         self.data_root = Path(os.getenv("EFB_DATA_ROOT", "/data"))
+        self.started_at = time.time()
 
     @staticmethod
     def markup(refresh: str = "") -> InlineKeyboardMarkup:
@@ -139,6 +210,16 @@ class OperationsUI:
         except Exception as error:
             return f"不可用（{redact_error(error)}）"
 
+    def _watchdog_state(self) -> dict:
+        control = getattr(self.channel, "watchdog_control", None)
+        if control is None:
+            return {}
+        try:
+            state = control.get_state()
+            return state if isinstance(state, dict) else {}
+        except Exception:
+            return {}
+
     def health_text(self) -> str:
         backup = backup_summary(self.data_root / "backups")
         state_root = self.data_root / "operations" / "state"
@@ -148,6 +229,9 @@ class OperationsUI:
         database = load_json(self.data_root / "database-audit-latest.json")
         capacity = load_json(self.data_root / "capacity-audit-latest.json")
         upstream = load_json(self.data_root / "upstream-audit-latest.json")
+        watchdog = self._watchdog_state()
+        spoiler_store = getattr(self.channel, "author_name_spoiler_store", None)
+        spoiler_enabled = bool(getattr(spoiler_store, "enabled", False))
         last_delivery = format_timestamp(
             delivery.get("last_delivered_at") or delivery.get("last_inbound_at")
         )
@@ -156,21 +240,48 @@ class OperationsUI:
         disk = capacity.get("disk") or {}
         free_percent = disk.get("free_percent")
         disk_text = f"{float(free_percent):.2f}%" if isinstance(free_percent, (int, float)) else "等待检查"
-        pending = reconcile.get("pending_count", 0)
-        failed = reconcile.get("failed_count", 0)
+        queue = delivery_summary(self.data_root, reconcile)
         updates = upstream.get("update_count", 0)
+        if watchdog:
+            recovery_text = (
+                "总开关" + ("开启" if watchdog.get("master_enabled") else "关闭")
+                + "｜全天" + ("开启" if watchdog.get("event_enabled") else "关闭")
+                + "｜凌晨" + ("开启" if watchdog.get("night_enabled") else "关闭")
+            )
+            recovery_window = (
+                f"{watchdog.get('daily_start', '02:50')}-"
+                f"{watchdog.get('daily_end', '03:50')}"
+            )
+            recovery_config = (
+                f"每{_duration_text(watchdog.get('poll_seconds', 120))}检查｜"
+                f"冷却{_duration_text(watchdog.get('click_cooldown_seconds', 120))}｜"
+                f"连续失败{watchdog.get('max_recovery_failures', 3)}次暂停"
+            )
+            diagnostic_retention = watchdog.get("diagnostic_retention", "仅保留最新一张")
+        else:
+            recovery_text = "等待检查"
+            recovery_window = "等待检查"
+            recovery_config = "等待检查"
+            diagnostic_retention = "等待检查"
         return (
             "EFB 综合状态\n\n"
+            f"EFB 运行时间：{format_uptime(self.started_at)}\n"
             f"微信：{self._wechat_login()}\n"
             f"Telegram Bot API：{self._bot_api()}\n"
             f"四容器与共享网络：{stack_status}\n"
             f"最近恢复动作：{health.get('action', '暂无')}\n"
+            f"自动恢复：{recovery_text}\n"
+            f"恢复时段：{recovery_window}\n"
+            f"恢复配置：{recovery_config}\n"
+            f"失败诊断：{diagnostic_retention}\n"
+            f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
             f"最近消息活动：{last_delivery}\n"
-            f"投递队列：待处理 {pending}｜失败 {failed}\n"
+            f"投递队列：待处理 {queue['pending']}｜失败 {queue['failed']}\n"
+            f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
             f"映射数据库：{database_status}\n"
             f"NAS 磁盘剩余：{disk_text}\n"
             f"待评估上游更新：{updates} 项\n"
-            f"配置备份：{backup['count']} 份\n"
+            f"配置备份：{backup['count']} 份｜{_human_size(backup['bytes'])}\n"
             f"镜像版本：{os.getenv('EFB_IMAGE_REVISION', '未知')}"
         )
 
