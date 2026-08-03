@@ -29,6 +29,7 @@ from .locale_mixin import LocaleMixin
 from .message import ETMMsg
 from .msg_type import TGMsgType
 from .utils import EFBChannelChatIDStr, TelegramChatID, TelegramMessageID, TgChatMsgIDStr, TelegramTopicID
+from .chat_title_sync import build_private_chat_title
 
 if TYPE_CHECKING:
     from . import TelegramChannel
@@ -1042,11 +1043,25 @@ class ChatBindingManager(LocaleMixin):
                                                 .format(channel=channel_id))
 
                 channel = coordinator.slaves[channel_id]
-                etm_chat: ETMChatType = self.chat_manager.update_chat_obj(channel.get_chat(chat_uid), full_update=True)
+                try:
+                    etm_chat: ETMChatType = self.chat_manager.update_chat_obj(
+                        channel.get_chat(chat_uid), full_update=True
+                    )
+                    topic_name = etm_chat.chat_title
+                except EFBChatNotFound:
+                    name_hint = self.db.get_chat_name_hint(slave_origin_uid)
+                    if not name_hint:
+                        raise
+                    topic_name = build_private_chat_title(channel.channel_emoji, name_hint)
+                    self.logger.info(
+                        "Recovered historical customer-service topic name for %s: %s",
+                        chat_uid,
+                        name_hint,
+                    )
                 self.bot.edit_forum_topic(
                     chat_id=update.effective_chat.id, 
                     message_thread_id=thread_id, 
-                    name=self.truncate_ellipsis(etm_chat.chat_title, self.MAX_LEN_CHAT_TITLE),
+                    name=self.truncate_ellipsis(topic_name, self.MAX_LEN_CHAT_TITLE),
                     icon_custom_emoji_id=""  # param required by telegram
                 )
                 update.effective_message.reply_text(self._('Chat details updated.'))

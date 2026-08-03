@@ -19,6 +19,7 @@ from ehforwarderbot import utils, Channel, coordinator, MsgType
 from ehforwarderbot.message import Substitutions, MessageCommands, MessageAttribute
 from ehforwarderbot.types import ModuleID, ChatID, MessageID, ReactionName
 from .chat_object_cache import ChatObjectCacheManager
+from .chat_title_sync import extract_service_chat_name
 from .message import ETMMsg
 from .msg_type import TGMsgType
 from .utils import TelegramChatID, EFBChannelChatIDStr, TgChatMsgIDStr, message_id_to_str, \
@@ -340,6 +341,18 @@ class DatabaseManager:
 
         if data:
             return pickle.dumps(data)
+        return None
+
+    @staticmethod
+    def get_chat_name_hint(slave_origin_uid: EFBChannelChatIDStr) -> Optional[str]:
+        """Recover a customer-service display name from an archived service message."""
+        rows = MsgLog.select(MsgLog.text).where(
+            MsgLog.slave_origin_uid == slave_origin_uid
+        ).order_by(MsgLog.time.asc())
+        for row in rows:
+            name = extract_service_chat_name(row.text)
+            if name:
+                return name
         return None
 
     @staticmethod

@@ -26,3 +26,12 @@ def test_user_customized_title_is_preserved():
 
 def test_plain_nontechnical_contact_id_is_not_renamed():
     assert not MODULE.should_auto_rename("💻👤 JERRYgu", "JERRYgu")
+
+
+def test_extract_service_chat_name_from_historical_customer_service_message():
+    assert MODULE.extract_service_chat_name("[Anker售后为你服务]") == "Anker售后"
+    assert MODULE.extract_service_chat_name("普通客服消息") is None
+
+
+def test_build_private_chat_title_for_historical_customer_service_name():
+    assert MODULE.build_private_chat_title("💻", "Anker售后") == "💻👤 Anker售后"
