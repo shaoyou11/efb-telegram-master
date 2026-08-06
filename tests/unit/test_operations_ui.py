@@ -109,6 +109,31 @@ def test_status_falls_back_to_persistent_delivery_queues(tmp_path, monkeypatch):
     assert "失败附件已持久化：1 条" in text
 
 
+def test_status_uses_live_queue_counts_after_reconcile_report_is_stale(tmp_path, monkeypatch):
+    state = tmp_path / "operations/state"
+    state.mkdir(parents=True)
+    pending_path = tmp_path / "profiles/comwechat/honus.comwechat"
+    pending_path.mkdir(parents=True)
+    (pending_path / "pending-files.json").write_text("{}", encoding="utf-8")
+    (state / "failed-deliveries.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "delivery-reconcile-latest.json").write_text(json.dumps({
+        "pending_count": 0,
+        "failed_count": 2,
+    }), encoding="utf-8")
+
+    ui = OperationsUI.__new__(OperationsUI)
+    ui.data_root = Path(tmp_path)
+    ui.started_at = 1000
+    ui.channel = SimpleNamespace()
+    monkeypatch.setattr(ui, "_wechat_login", lambda: "已登录")
+    monkeypatch.setattr(ui, "_bot_api", lambda: "正常")
+    monkeypatch.setattr("efb_telegram_master.operations_ui.time.time", lambda: 1000)
+
+    text = ui.health_text()
+
+    assert "待处理 0｜失败 0" in text
+
+
 def test_delivery_details_exposes_pending_and_failed_items(tmp_path):
     pending_path = tmp_path / "profiles/comwechat/honus.comwechat"
     pending_path.mkdir(parents=True)

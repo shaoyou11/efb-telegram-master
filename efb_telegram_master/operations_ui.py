@@ -105,20 +105,20 @@ def _record_count(value) -> int:
 
 def delivery_summary(data_root: Path, reconcile: dict) -> dict:
     state_root = data_root / "operations" / "state"
-    failed_records = load_json(state_root / "failed-deliveries.json")
-    pending_records = load_json(
+    pending_path = (
         data_root / "profiles" / "comwechat" / "honus.comwechat" / "pending-files.json"
     )
+    failed_path = state_root / "failed-deliveries.json"
+    failed_records = load_json(failed_path)
+    pending_records = load_json(pending_path)
     try:
-        pending = max(0, int(reconcile.get("pending_count", 0)))
+        report_pending = max(0, int(reconcile.get("pending_count", 0)))
+        report_failed = max(0, int(reconcile.get("failed_count", 0)))
     except (TypeError, ValueError):
-        pending = 0
-    try:
-        failed = max(0, int(reconcile.get("failed_count", 0)))
-    except (TypeError, ValueError):
-        failed = 0
-    pending = max(pending, _record_count(pending_records))
-    failed = max(failed, _record_count(failed_records))
+        report_pending = 0
+        report_failed = 0
+    pending = _record_count(pending_records) if pending_path.is_file() else report_pending
+    failed = _record_count(failed_records) if failed_path.is_file() else report_failed
     persisted = sum(
         1
         for record in failed_records.values()
