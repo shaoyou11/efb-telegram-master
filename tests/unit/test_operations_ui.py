@@ -7,8 +7,10 @@ from efb_telegram_master.operations_ui import (
     OperationsUI,
     _human_size,
     backup_summary,
+    delivery_details,
     format_timestamp,
     format_uptime,
+    format_delivery_details,
     load_json,
     redact_error,
     scan_sensitive_keys,
@@ -104,6 +106,97 @@ def test_status_falls_back_to_persistent_delivery_queues(tmp_path, monkeypatch):
 
     assert "待处理 1｜失败 1" in text
     assert "失败附件已持久化：1 条" in text
+
+
+def test_delivery_details_exposes_pending_and_failed_items(tmp_path):
+    pending_path = tmp_path / "profiles/comwechat/honus.comwechat"
+    pending_path.mkdir(parents=True)
+    (pending_path / "pending-files.json").write_text(json.dumps({
+        "/comwechat/Files/": {
+            "msg": {
+                "type": "video",
+                "msgid": "5626155171855065761",
+                "filename": "wechat-channel.mp4",
+                "timestamp": 1900,
+            },
+        },
+    }), encoding="utf-8")
+
+    state = tmp_path / "operations/state"
+    state.mkdir(parents=True)
+    available = tmp_path / "available.jpg"
+    available.write_bytes(b"image")
+    (state / "failed-deliveries.json").write_text(json.dumps({
+        "available-token": {
+            "uid": "1234567890",
+            "type": "Image",
+            "path": str(available),
+            "filename": "available.jpg",
+            "error": "Flood control exceeded",
+            "created_at": 1900,
+            "expires": 3000,
+        },
+        "missing-token": {
+            "uid": "9876543210",
+            "type": "Video",
+            "path": str(tmp_path / "missing.mp4"),
+            "filename": "missing.mp4",
+            "error": "source unavailable",
+            "created_at": 1900,
+            "expires": 3000,
+        },
+    }), encoding="utf-8")
+
+    details = delivery_details(tmp_path, now=2000)
+    text = format_delivery_details(tmp_path, now=2000)
+
+    assert len(details["pending"]) == 1
+    assert details["pending"][0]["can_retry"] is False
+    assert "待处理 #1" in text
+    assert "类型：视频" in text
+    assert "wechat-channel.mp4" in text
+    assert "无法继续" in text
+    assert "失败 #1" in text
+    assert "原因：Flood control exceeded" in text
+    assert "失败 #2" in text
+    assert "原文件已不存在，无法继续推送" in text
+
+
+def test_delivery_markup_only_offers_retry_for_readable_files(tmp_path):
+    available = tmp_path / "available.jpg"
+    available.write_bytes(b"image")
+    state = tmp_path / "operations/state"
+    state.mkdir(parents=True)
+    (state / "failed-deliveries.json").write_text(json.dumps({
+        "available-token": {
+            "path": str(available),
+            "expires": 3000,
+        },
+        "missing-token": {
+            "path": str(tmp_path / "missing.mp4"),
+            "expires": 3000,
+        },
+    }), encoding="utf-8")
+
+    ui = OperationsUI.__new__(OperationsUI)
+    markup = ui.delivery_markup(delivery_details(tmp_path, now=2000))
+    callbacks = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+    ]
+
+    assert "retry:available-token" in callbacks
+    assert "retry:missing-token" not in callbacks
+    assert "ops:delivery" in callbacks
+    assert "ops:diagnostic" in callbacks
+    assert "ops:close" in callbacks
+
+
+def test_diagnostic_path_is_scoped_to_efb_data_root(tmp_path):
+    from efb_telegram_master.operations_ui import diagnostic_path
+
+    assert diagnostic_path(tmp_path) == tmp_path / "watchdog/diagnostics/last-login-failure.png"
 
 
 def test_backup_summary_reports_count_and_latest_without_file_content(tmp_path: Path):

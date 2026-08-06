@@ -132,6 +132,179 @@ def delivery_summary(data_root: Path, reconcile: dict) -> dict:
     }
 
 
+_MESSAGE_TYPE_NAMES = {
+    "image": "图片",
+    "video": "视频",
+    "file": "文件",
+    "audio": "音频",
+    "link": "链接",
+    "text": "文本",
+    "sticker": "贴纸",
+    "location": "位置",
+}
+
+
+def _message_type_name(value) -> str:
+    text = str(value or "未知")
+    return _MESSAGE_TYPE_NAMES.get(text.lower(), text)
+
+
+def _short_identifier(value) -> str:
+    text = str(value or "未知")
+    return text if len(text) <= 12 else f"…{text[-8:]}"
+
+
+def _record_timestamp(*values):
+    for value in values:
+        try:
+            timestamp = float(value)
+        except (TypeError, ValueError):
+            continue
+        if timestamp > 100_000_000_000:
+            timestamp /= 1000
+        return timestamp
+    return None
+
+
+def _regular_file(path_value) -> bool:
+    if not path_value:
+        return False
+    try:
+        return Path(path_value).is_file()
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _display_filename(filename, path_value) -> str:
+    if filename:
+        return Path(str(filename)).name or str(filename)
+    try:
+        name = Path(str(path_value)).name
+    except (OSError, ValueError, TypeError):
+        name = ""
+    return name or "未知"
+
+
+def diagnostic_path(data_root: Path) -> Path:
+    return Path(data_root) / "watchdog" / "diagnostics" / "last-login-failure.png"
+
+
+def delivery_details(data_root: Path, now=None) -> dict:
+    """Return inspectable queue records without changing or pruning them."""
+    now = time.time() if now is None else now
+    pending_data = load_json(
+        data_root / "profiles" / "comwechat" / "honus.comwechat" / "pending-files.json"
+    )
+    failed_data = load_json(data_root / "operations" / "state" / "failed-deliveries.json")
+    pending = []
+    for key, raw_record in pending_data.items():
+        record = raw_record if isinstance(raw_record, dict) else {}
+        message = record.get("msg") if isinstance(record.get("msg"), dict) else record
+        path_value = (
+            record.get("path")
+            or record.get("filepath")
+            or message.get("path")
+            or message.get("filepath")
+            or key
+        )
+        readable = _regular_file(path_value)
+        path_exists = False
+        try:
+            path_exists = Path(str(path_value)).exists()
+        except (OSError, ValueError, TypeError):
+            pass
+        pending.append({
+            "type": _message_type_name(message.get("type") or record.get("type")),
+            "filename": _display_filename(
+                message.get("filename") or record.get("filename"), path_value
+            ),
+            "identifier": _short_identifier(
+                message.get("msgid") or message.get("uid") or record.get("msgid") or key
+            ),
+            "timestamp": _record_timestamp(
+                message.get("timestamp"), record.get("created_at")
+            ),
+            "readable": readable,
+            "can_retry": False,
+            "status": (
+                "原文件可读，等待 EFB 继续处理"
+                if readable
+                else (
+                    "原路径不是文件，无法继续；请在微信端重新发送"
+                    if path_exists
+                    else "原文件已不存在，无法继续；请在微信端重新发送"
+                )
+            ),
+        })
+
+    failed = []
+    for token, raw_record in failed_data.items():
+        if not isinstance(raw_record, dict):
+            continue
+        created_at = _record_timestamp(raw_record.get("created_at"))
+        expires = _record_timestamp(raw_record.get("expires"))
+        readable = _regular_file(raw_record.get("path"))
+        expired = expires is not None and expires <= now
+        can_retry = readable and not expired
+        if expired:
+            status = "记录已过期，无法继续推送"
+        elif readable:
+            status = "原文件可读，可继续推送"
+        else:
+            status = "原文件已不存在，无法继续推送；请重新发送"
+        failed.append({
+            "token": str(token),
+            "type": _message_type_name(raw_record.get("type")),
+            "filename": _display_filename(raw_record.get("filename"), raw_record.get("path")),
+            "identifier": _short_identifier(raw_record.get("uid")),
+            "timestamp": created_at,
+            "error": redact_error(raw_record.get("error") or "未知原因"),
+            "readable": readable,
+            "can_retry": can_retry,
+            "status": status,
+        })
+    return {"pending": pending, "failed": failed}
+
+
+def format_delivery_details(data_root: Path, now=None) -> str:
+    details = delivery_details(data_root, now=now)
+    pending = details["pending"]
+    failed = details["failed"]
+    lines = [
+        "EFB 投递明细",
+        "",
+        f"待处理：{len(pending)} 条｜失败：{len(failed)} 条",
+    ]
+    for index, item in enumerate(pending, 1):
+        lines.extend([
+            "",
+            f"待处理 #{index}",
+            f"类型：{item['type']}",
+            f"文件：{item['filename']}",
+            f"消息：{item['identifier']}",
+            f"时间：{format_timestamp(item['timestamp'])}",
+            f"状态：{item['status']}",
+        ])
+    for index, item in enumerate(failed, 1):
+        lines.extend([
+            "",
+            f"失败 #{index}",
+            f"类型：{item['type']}",
+            f"文件：{item['filename']}",
+            f"消息：{item['identifier']}",
+            f"时间：{format_timestamp(item['timestamp'])}",
+            f"原因：{item['error']}",
+            f"状态：{item['status']}",
+        ])
+    if not pending and not failed:
+        lines.extend(["", "当前没有待处理或失败记录。"])
+    lines.extend([
+        "",
+        "待处理项由 EFB 自动继续；原文件失效时只能在微信端重新发送。",
+    ])
+    return "\n".join(lines)
+
+
 def _duration_text(seconds) -> str:
     try:
         seconds = max(0, int(seconds))
@@ -177,18 +350,26 @@ class OperationsUI:
         self.started_at = time.time()
 
     @staticmethod
-    def markup(refresh: str = "") -> InlineKeyboardMarkup:
+    def markup(refresh: str = "", actions=()) -> InlineKeyboardMarkup:
+        rows = []
+        action_row = []
+        for label, action in actions:
+            callback = action if str(action).startswith("ops:") else f"ops:{action}"
+            action_row.append(InlineKeyboardButton(label, callback_data=callback))
+        if action_row:
+            rows.append(action_row)
         row = []
         if refresh:
             row.append(InlineKeyboardButton("刷新", callback_data=f"ops:{refresh}"))
         row.append(InlineKeyboardButton("关闭", callback_data="ops:close"))
-        return InlineKeyboardMarkup([row])
+        rows.append(row)
+        return InlineKeyboardMarkup(rows)
 
     def _allowed(self, update: Update) -> bool:
         return bool(update.effective_user and update.effective_user.id in self.channel.config["admins"])
 
-    def _send(self, update: Update, text: str, refresh: str = ""):
-        markup = self.markup(refresh)
+    def _send(self, update: Update, text: str, refresh: str = "", actions=()):
+        markup = self.markup(refresh, actions=actions)
         if update.callback_query:
             update.callback_query.edit_message_text(text, reply_markup=markup)
         else:
@@ -287,10 +468,70 @@ class OperationsUI:
 
     def health(self, update: Update, _context: CallbackContext):
         if self._allowed(update):
-            self._send(update, self.health_text(), "status")
+            self._send(
+                update,
+                self.health_text(),
+                "status",
+                actions=(("投递明细", "delivery"), ("失败诊断", "diagnostic")),
+            )
 
     def status(self, update: Update, context: CallbackContext):
         self.health(update, context)
+
+    def delivery_markup(self, details: dict) -> InlineKeyboardMarkup:
+        rows = []
+        for index, item in enumerate(details.get("failed", []), 1):
+            if item.get("can_retry"):
+                rows.append([
+                    InlineKeyboardButton(
+                        f"继续推送 #{index}",
+                        callback_data=f"retry:{item['token']}",
+                    )
+                ])
+        rows.append([
+            InlineKeyboardButton("刷新明细", callback_data="ops:delivery"),
+            InlineKeyboardButton("失败诊断", callback_data="ops:diagnostic"),
+        ])
+        rows.append([InlineKeyboardButton("关闭", callback_data="ops:close")])
+        return InlineKeyboardMarkup(rows)
+
+    def delivery(self, update: Update, _context: CallbackContext):
+        if not self._allowed(update):
+            return
+        text = format_delivery_details(self.data_root)
+        markup = self.delivery_markup(delivery_details(self.data_root))
+        if update.callback_query:
+            update.callback_query.edit_message_text(text, reply_markup=markup)
+        else:
+            update.effective_message.reply_text(text, reply_markup=markup)
+
+    def diagnostic(self, update: Update, _context: CallbackContext):
+        if not self._allowed(update):
+            return
+        path = diagnostic_path(self.data_root)
+        if not path.is_file():
+            self._send(
+                update,
+                "EFB 失败诊断\n\n当前没有失败诊断图片。\n诊断图只在最近一次自动恢复失败时保留；登录成功后 watchdog 会自动清理。",
+                actions=(("投递明细", "delivery"),),
+            )
+            return
+        chat = update.effective_chat
+        chat_id = getattr(chat, "id", None)
+        bot_manager = getattr(self.channel, "bot_manager", None)
+        if chat_id is None or bot_manager is None:
+            self._send(update, "无法定位当前 Telegram 会话。")
+            return
+        try:
+            with path.open("rb") as image:
+                bot_manager.send_photo(
+                    chat_id=chat_id,
+                    photo=image,
+                    caption="EFB Watchdog 最近一次失败诊断",
+                    reply_markup=self.markup(actions=(("关闭", "close"),)),
+                )
+        except Exception as error:
+            self._send(update, f"失败诊断图片发送失败：{redact_error(error)}")
 
     def version(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):
@@ -353,6 +594,8 @@ class OperationsUI:
         handlers = {
             "health": self.health,
             "status": self.status,
+            "delivery": self.delivery,
+            "diagnostic": self.diagnostic,
             "backup": self.backup_info,
             "filetest": self.filetest,
             "security": self.security,
