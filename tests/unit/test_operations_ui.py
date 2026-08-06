@@ -9,6 +9,7 @@ from efb_telegram_master.operations_ui import (
     backup_summary,
     clear_invalid_delivery_records,
     delivery_details,
+    delivery_summary,
     format_timestamp,
     format_uptime,
     format_delivery_details,
@@ -204,6 +205,79 @@ def test_delivery_details_exposes_pending_and_failed_items(tmp_path):
     assert "内容：完整失败消息内容" in text
     assert "失败 #2" in text
     assert "原文件已不存在，无法继续推送" in text
+
+
+def test_delivery_details_exposes_bridge_active_items(tmp_path):
+    active = [{
+        "id": "bridge-article",
+        "state": "staged",
+        "received_at": 1900,
+        "available_at": 1900,
+        "attempts": 0,
+        "last_error": "",
+        "source_key": "48182341636@chatroom",
+        "message": {
+            "type": 49,
+            "msgid": "article-1900",
+            "sender": "wxid_source",
+            "filepath": r"shaoyou11\FileStorage\Cache\2026-08\article.jpg",
+            "timestamp": 1900,
+            "content": "公众号文章标题",
+        },
+    }]
+
+    details = delivery_details(tmp_path, now=2000, bridge_messages=active)
+    text = format_delivery_details(tmp_path, now=2000, details=details)
+
+    assert len(details["bridge"]) == 1
+    assert details["bridge"][0]["type"] == "链接/公众号"
+    assert "Bridge 队列：1 条" in text
+    assert "Bridge 队列 #1" in text
+    assert "微信会话：48182341636@chatroom" in text
+    assert "发送者：wxid_source" in text
+    assert "发送到：待 EFB 消费后按会话映射" in text
+    assert "公众号文章标题" in text
+    assert "Bridge 暂存" in text
+
+
+def test_delivery_summary_reports_bridge_queue_counts(tmp_path):
+    result = delivery_summary(tmp_path, {}, bridge={
+        "ok": True,
+        "queue_size": 3,
+        "staged_size": 1,
+        "pending_size": 1,
+        "inflight_size": 1,
+        "dead_letter_size": 2,
+    })
+
+    assert result["bridge_available"] is True
+    assert result["bridge_active"] == 3
+    assert result["bridge_staged"] == 1
+    assert result["bridge_pending"] == 1
+    assert result["bridge_inflight"] == 1
+    assert result["bridge_dead"] == 2
+
+
+def test_bridge_delivery_target_uses_topic_association():
+    ui = OperationsUI.__new__(OperationsUI)
+    ui.channel = SimpleNamespace(db=SimpleNamespace(
+        get_topic_assocs=lambda source_uid: [(-1001234567890, 22)],
+        get_chat_assoc=lambda **kwargs: [],
+    ))
+    details = {
+        "pending": [],
+        "failed": [],
+        "bridge": [{
+            "source_uid": "honus.comwechat 48182341636@chatroom",
+            "telegram_target": "待 EFB 消费后按会话映射",
+        }],
+    }
+
+    ui._resolve_delivery_targets(details)
+
+    assert details["bridge"][0]["telegram_target"] == (
+        "Telegram chat_id=-1001234567890，话题=22"
+    )
 
 
 def test_delivery_markup_only_offers_retry_for_readable_files(tmp_path):

@@ -74,6 +74,12 @@ def _post_json(url: str, payload: bytes = b"{}", timeout: int = 3) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _get_json(url: str, timeout: float = 0.5) -> dict:
+    with request.urlopen(request.Request(url), timeout=timeout) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    return result if isinstance(result, dict) else {}
+
+
 def _human_size(size: int) -> str:
     value = float(size)
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -104,7 +110,14 @@ def _record_count(value) -> int:
     return 0
 
 
-def delivery_summary(data_root: Path, reconcile: dict) -> dict:
+def _nonnegative_int(value, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def delivery_summary(data_root: Path, reconcile: dict, bridge: dict = None) -> dict:
     state_root = data_root / "operations" / "state"
     pending_path = (
         data_root / "profiles" / "comwechat" / "honus.comwechat" / "pending-files.json"
@@ -129,10 +142,24 @@ def delivery_summary(data_root: Path, reconcile: dict) -> dict:
             or str(record.get("path", "")).find("failed-media") >= 0
         )
     )
+    bridge_data = bridge if isinstance(bridge, dict) and bridge.get("ok") else {}
+    bridge_staged = _nonnegative_int(bridge_data.get("staged_size"))
+    bridge_pending = _nonnegative_int(bridge_data.get("pending_size"))
+    bridge_inflight = _nonnegative_int(bridge_data.get("inflight_size"))
+    bridge_active = _nonnegative_int(
+        bridge_data.get("queue_size"),
+        bridge_staged + bridge_pending + bridge_inflight,
+    )
     return {
         "pending": pending,
         "failed": failed,
         "persisted_failed_media": persisted,
+        "bridge_available": bool(bridge_data),
+        "bridge_active": bridge_active,
+        "bridge_staged": bridge_staged,
+        "bridge_pending": bridge_pending,
+        "bridge_inflight": bridge_inflight,
+        "bridge_dead": _nonnegative_int(bridge_data.get("dead_letter_size")),
     }
 
 
@@ -145,6 +172,12 @@ _MESSAGE_TYPE_NAMES = {
     "text": "文本",
     "sticker": "贴纸",
     "location": "位置",
+    "3": "图片",
+    "34": "语音",
+    "43": "视频",
+    "47": "贴纸",
+    "49": "链接/公众号",
+    "2004": "文件",
 }
 
 
@@ -235,8 +268,10 @@ def _regular_file(path_value) -> bool:
 
 
 def _display_filename(filename, path_value) -> str:
-    if filename:
-        return Path(str(filename)).name or str(filename)
+    value = filename or path_value
+    if value:
+        text = str(value)
+        return re.split(r"[\\/]", text)[-1] or text
     return "未记录"
 
 
@@ -261,7 +296,58 @@ def diagnostic_path(data_root: Path) -> Path:
     return Path(data_root) / "watchdog" / "diagnostics" / "last-login-failure.png"
 
 
-def delivery_details(data_root: Path, now=None) -> dict:
+def _bridge_source_uid(source_key) -> str:
+    source = str(source_key or "").strip()
+    if not source:
+        return ""
+    channel_id = os.getenv("EFB_WECHAT_CHANNEL_ID", "honus.comwechat")
+    return source if source.startswith(f"{channel_id} ") else f"{channel_id} {source}"
+
+
+def _bridge_status(state: str) -> str:
+    return {
+        "staged": "Bridge 暂存：等待附件或登录顺序检查",
+        "pending": "Bridge 已就绪：等待 EFB 取走",
+        "inflight": "Bridge 已交给 EFB：等待确认回执",
+    }.get(str(state or ""), f"Bridge 状态：{state or '未知'}")
+
+
+def _bridge_delivery_details(active_messages) -> list:
+    records = []
+    for raw_item in active_messages or []:
+        if not isinstance(raw_item, dict):
+            continue
+        message = raw_item.get("message")
+        message = message if isinstance(message, dict) else {}
+        source_key = raw_item.get("source_key") or message.get("chat")
+        path_value = message.get("filepath") or message.get("path") or message.get("thumb_path")
+        identifier = message.get("msgid") or message.get("uid") or raw_item.get("id")
+        error = redact_error(raw_item.get("last_error") or "")
+        records.append({
+            "type": _message_type_name(message.get("type")),
+            "filename": _display_filename(message.get("filename"), path_value),
+            "identifier": _full_identifier(identifier),
+            "timestamp": _record_timestamp(
+                message.get("timestamp"), message.get("time"), raw_item.get("received_at")
+            ),
+            "wechat_chat": str(source_key or message.get("chat_name") or "未知"),
+            "sender": str(message.get("sender") or message.get("wxid") or "未知"),
+            "telegram_target": "待 EFB 消费后按会话映射",
+            "content": _message_content({}, message),
+            "source_uid": _bridge_source_uid(source_key),
+            "path": str(path_value or "未记录"),
+            "readable": False,
+            "can_retry": False,
+            "can_clear": False,
+            "state": str(raw_item.get("state") or "未知"),
+            "attempts": _nonnegative_int(raw_item.get("attempts")),
+            "error": error,
+            "status": _bridge_status(raw_item.get("state")),
+        })
+    return records
+
+
+def delivery_details(data_root: Path, now=None, bridge_messages=None) -> dict:
     """Return inspectable queue records without changing or pruning them."""
     now = time.time() if now is None else now
     pending_data = load_json(
@@ -349,7 +435,11 @@ def delivery_details(data_root: Path, now=None) -> dict:
             "path": str(raw_record.get("path") or "未知"),
             "status": status,
         })
-    return {"pending": pending, "failed": failed}
+    return {
+        "pending": pending,
+        "failed": failed,
+        "bridge": _bridge_delivery_details(bridge_messages),
+    }
 
 
 def clear_invalid_delivery_records(data_root: Path, now=None) -> dict:
@@ -420,10 +510,12 @@ def format_delivery_details(data_root: Path, now=None, details=None) -> str:
     details = delivery_details(data_root, now=now) if details is None else details
     pending = details["pending"]
     failed = details["failed"]
+    bridge = details.get("bridge", [])
     lines = [
         "EFB 投递明细",
         "",
         f"待处理：{len(pending)} 条｜失败：{len(failed)} 条",
+        f"Bridge 队列：{len(bridge)} 条",
     ]
     for index, item in enumerate(pending, 1):
         lines.extend([
@@ -456,7 +548,24 @@ def format_delivery_details(data_root: Path, now=None, details=None) -> str:
             f"原因：{item['error']}",
             f"状态：{item['status']}",
         ])
-    if not pending and not failed:
+    for index, item in enumerate(bridge, 1):
+        lines.extend([
+            "",
+            f"Bridge 队列 #{index}",
+            f"类型：{item['type']}",
+            f"文件：{item['filename']}",
+            f"路径：{item['path']}",
+            f"微信会话：{item['wechat_chat']}",
+            f"发送者：{item['sender']}",
+            f"发送到：{item['telegram_target']}",
+            f"消息：{item['identifier']}",
+            f"时间：{format_timestamp(item['timestamp'])}",
+            f"内容：{item['content']}",
+            f"状态：{item['status']}",
+        ])
+        if item.get("error"):
+            lines.append(f"原因：{item['error']}")
+    if not pending and not failed and not bridge:
         lines.extend(["", "当前没有待处理或失败记录。"])
     lines.extend([
         "",
@@ -551,6 +660,28 @@ class OperationsUI:
         except Exception as error:
             return f"不可用（{redact_error(error)}）"
 
+    @staticmethod
+    def _bridge_base_url() -> str:
+        return os.getenv(
+            "COMWECHAT_BRIDGE_API_BASE", "http://127.0.0.1:19088"
+        ).rstrip("/")
+
+    def _bridge_health(self) -> dict:
+        try:
+            return _get_json(f"{self._bridge_base_url()}/healthz")
+        except Exception:
+            return {}
+
+    def _bridge_active(self) -> list:
+        try:
+            result = _get_json(
+                f"{self._bridge_base_url()}/v1/messages/active?limit=20"
+            )
+            messages = result.get("messages", [])
+            return messages if isinstance(messages, list) else []
+        except Exception:
+            return []
+
     def _watchdog_state(self) -> dict:
         control = getattr(self.channel, "watchdog_control", None)
         if control is None:
@@ -582,7 +713,14 @@ class OperationsUI:
         disk = capacity.get("disk") or {}
         free_percent = disk.get("free_percent")
         disk_text = f"{float(free_percent):.2f}%" if isinstance(free_percent, (int, float)) else "等待检查"
-        queue = delivery_summary(self.data_root, reconcile)
+        bridge = self._bridge_health()
+        queue = delivery_summary(self.data_root, reconcile, bridge=bridge)
+        bridge_text = (
+            f"Bridge 队列：暂存 {queue['bridge_staged']}｜待投递 {queue['bridge_pending']}｜"
+            f"处理中 {queue['bridge_inflight']}｜总计 {queue['bridge_active']}｜死信 {queue['bridge_dead']}\n"
+            if queue["bridge_available"]
+            else "Bridge 队列：暂不可读\n"
+        )
         slave_messages = getattr(self.channel, "slave_messages", None)
         scheduler = slave_messages.scheduler.snapshot() if slave_messages else {}
         trace = slave_messages.trace.latest() if slave_messages else None
@@ -629,6 +767,7 @@ class OperationsUI:
             f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
             f"最近消息活动：{last_delivery}\n"
             f"投递队列：待处理 {queue['pending']}｜失败 {queue['failed']}\n"
+            f"{bridge_text}"
             f"会话队列：活跃 {scheduler.get('active_chats', 0)}｜联系人 {scheduler.get('contact_chats', 0)}｜群聊 {scheduler.get('group_chats', 0)}\n"
             f"最近流转阶段：{trace.get('stage', '暂无') if trace else '暂无'}\n"
             f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
@@ -685,37 +824,44 @@ class OperationsUI:
         db = getattr(self.channel, "db", None)
         if db is None:
             return
-        for item in details.get("pending", []):
-            if item.get("telegram_target") != "待处理记录未保存 Telegram 目标":
-                continue
-            source_uid = item.get("source_uid")
-            if not source_uid:
-                continue
-            try:
-                topics = db.get_topic_assocs(source_uid)
-                if topics:
-                    item["telegram_target"] = "；".join(
-                        f"Telegram chat_id={chat_id}，话题={thread_id}"
-                        for chat_id, thread_id in topics
-                    )
+        for category in ("pending", "failed", "bridge"):
+            for item in details.get(category, []):
+                if item.get("telegram_target") not in {
+                    "待处理记录未保存 Telegram 目标",
+                    "待 EFB 消费后按会话映射",
+                }:
                     continue
-                masters = db.get_chat_assoc(slave_uid=source_uid)
-                targets = []
-                for master_uid in masters:
-                    try:
-                        _, chat_id, _ = chat_id_str_to_id(master_uid)
-                        targets.append(f"Telegram chat_id={chat_id}，主会话")
-                    except (IndexError, TypeError, ValueError):
-                        targets.append(f"Telegram 目标={master_uid}")
-                if targets:
-                    item["telegram_target"] = "；".join(targets)
-            except Exception:
-                continue
+                source_uid = item.get("source_uid")
+                if not source_uid:
+                    continue
+                try:
+                    topics = db.get_topic_assocs(source_uid)
+                    if topics:
+                        item["telegram_target"] = "；".join(
+                            f"Telegram chat_id={chat_id}，话题={thread_id}"
+                            for chat_id, thread_id in topics
+                        )
+                        continue
+                    masters = db.get_chat_assoc(slave_uid=source_uid)
+                    targets = []
+                    for master_uid in masters:
+                        try:
+                            _, chat_id, _ = chat_id_str_to_id(master_uid)
+                            targets.append(f"Telegram chat_id={chat_id}，主会话")
+                        except (IndexError, TypeError, ValueError):
+                            targets.append(f"Telegram 目标={master_uid}")
+                    if targets:
+                        item["telegram_target"] = "；".join(targets)
+                except Exception:
+                    continue
 
     def delivery(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):
             return
-        details = delivery_details(self.data_root)
+        details = delivery_details(
+            self.data_root,
+            bridge_messages=self._bridge_active(),
+        )
         self._resolve_delivery_targets(details)
         text = format_delivery_details(self.data_root, details=details)
         markup = self.delivery_markup(details)
