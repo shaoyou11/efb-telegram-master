@@ -38,8 +38,12 @@ from .chat_destination_cache import ChatDestinationCache
 from .chat_object_cache import ChatObjectCacheManager
 from .chat_title_sync import should_auto_rename
 from .commands import ETMCommandMsgStorage
+from .content_parser import normalize_wechat_html
 from .constants import Emoji
 from .delivery_policy import DeliveryPolicy
+from .digest import DigestManager, DigestStore
+from .delivery_scheduler import DeliveryScheduler, TelegramRateLimiter
+from .delivery_trace import DeliveryTraceStore
 from .delivery_telemetry import DeliveryTelemetry, sanitize_failure
 from .failed_delivery import FailedDeliveryStore
 from .failed_media import cleanup_failed_media, persist_failed_media
@@ -81,6 +85,25 @@ class SlaveMessageProcessor(LocaleMixin):
             "EFB_FAILED_MEDIA_ROOT",
             "/data/operations/failed-media",
         ))
+        self.trace = DeliveryTraceStore(Path(os.getenv(
+            "EFB_DELIVERY_TRACE_STATE",
+            "/data/operations/state/delivery-trace.json",
+        )))
+        self.scheduler = DeliveryScheduler(
+            worker_count=int(os.getenv("EFB_DELIVERY_WORKERS", "4")),
+        )
+        self.rate_limiter = TelegramRateLimiter(
+            rate_per_second=float(os.getenv("EFB_TELEGRAM_RATE_PER_SECOND", "4")),
+            burst=int(os.getenv("EFB_TELEGRAM_BURST", "4")),
+        )
+        self.digest_manager = DigestManager(
+            DigestStore(Path(os.getenv(
+                "EFB_DIGEST_STATE",
+                "/data/operations/state/digest.json",
+            ))),
+            self.bot.send_message,
+            interval=int(os.getenv("EFB_DIGEST_INTERVAL_SECONDS", "3600")),
+        )
         self.failed_messages = {}
 
     def delivery_policy(self, msg: Message) -> DeliveryPolicy:
@@ -114,8 +137,11 @@ class SlaveMessageProcessor(LocaleMixin):
         msg = kwargs["msg"]
         for attempt in range(1, self.DELIVERY_RETRY_COUNT + 1):
             try:
+                if not self.rate_limiter.acquire(timeout=30):
+                    raise TimeoutError("Telegram 发送速率等待超时")
                 if attempt > 1:
                     self.prepare_file_retry(msg)
+                self.trace.record(str(msg.uid), "telegram_send", attempt=attempt)
                 self.dispatch_message(**kwargs)
                 return
             except telegram.error.RetryAfter as error:
@@ -166,7 +192,43 @@ class SlaveMessageProcessor(LocaleMixin):
                 return None
         return False
 
+    def _ensure_file_ready(self, msg: Message) -> None:
+        if not msg.path:
+            return
+        path = Path(msg.path)
+        if not path.is_file():
+            raise FileNotFoundError(str(path))
+        try:
+            first = path.stat()
+            settle_seconds = max(0.0, float(os.getenv("EFB_FILE_SETTLE_SECONDS", "0.05")))
+            if settle_seconds:
+                time.sleep(settle_seconds)
+            second = path.stat()
+        except OSError as error:
+            raise FileNotFoundError(str(path)) from error
+        if first.st_size != second.st_size or first.st_mtime_ns != second.st_mtime_ns:
+            raise OSError(f"附件仍在写入：{path.name}")
+        self.trace.record(str(msg.uid), "preflight", filename=msg.filename or path.name, size=second.st_size)
+
     def send_message(self, msg: Message) -> Message:
+        chat_key = utils.chat_id_to_str(chat=msg.chat)
+        is_contact = isinstance(msg.chat, PrivateChat)
+        self.trace.record(
+            str(msg.uid),
+            "received",
+            chat=chat_key,
+            sender=getattr(msg.author, "uid", ""),
+            type=getattr(msg.type, "name", msg.type),
+        )
+        future = self.scheduler.submit(
+            chat_key,
+            is_contact,
+            lambda: self._send_message_sync(msg),
+        )
+        self.trace.record(str(msg.uid), "queued", chat=chat_key, priority=0 if is_contact else 10)
+        return future.result()
+
+    def _send_message_sync(self, msg: Message) -> Message:
         """
         Process a message from slave channel and deliver it to the user.
 
@@ -187,12 +249,14 @@ class SlaveMessageProcessor(LocaleMixin):
         try:
             xid = msg.uid
             self.logger.debug("[%s] Slave message delivered to ETM.\n%s", xid, msg)
+            self._ensure_file_ready(msg)
 
             policy = self.delivery_policy(msg)
             if policy is DeliveryPolicy.FILTERED:
                 self.logger.debug("[%s] Message is not delivered per chat delivery policy.", xid)
                 self.telemetry.filtered(str(msg.uid))
                 self.mark_delivery(msg, "filtered")
+                self.trace.record(str(msg.uid), "filtered", reason="delivery policy")
                 return msg
 
             if msg.type == MsgType.File and not msg.edit:
@@ -213,6 +277,7 @@ class SlaveMessageProcessor(LocaleMixin):
                 self.logger.debug("[%s] Message is not delivered per silent settings.", xid)
                 self.telemetry.filtered(str(msg.uid))
                 self.mark_delivery(msg, "skipped")
+                self.trace.record(str(msg.uid), "filtered", reason="silent setting")
                 return msg
             if policy is DeliveryPolicy.SILENT:
                 silent = True
@@ -221,6 +286,15 @@ class SlaveMessageProcessor(LocaleMixin):
                 self.logger.debug("[%s] Sender of the message is muted.", xid)
                 self.telemetry.filtered(str(msg.uid))
                 self.mark_delivery(msg, "skipped")
+                self.trace.record(str(msg.uid), "filtered", reason="missing Telegram target")
+                return msg
+
+            digest_key = f"tg:{tg_dest}:{thread_id or 0}"
+            if policy is DeliveryPolicy.SILENT and self.digest_manager.enabled(digest_key):
+                self.digest_manager.add(digest_key, tg_dest, thread_id, msg)
+                self.telemetry.filtered(str(msg.uid))
+                self.mark_delivery(msg, "digested")
+                self.trace.record(str(msg.uid), "filtered", reason="silent digest")
                 return msg
 
             # When editing message
@@ -249,9 +323,16 @@ class SlaveMessageProcessor(LocaleMixin):
             )
             self.telemetry.delivered(str(msg.uid))
             self.mark_delivery(msg, "delivered")
+            self.trace.record(
+                str(msg.uid),
+                "telegram_ack",
+                target=tg_dest,
+                topic=thread_id,
+            )
         except Exception as e:
             self.telemetry.failed(str(msg.uid), repr(e))
             self.mark_delivery(msg, "failed", repr(e))
+            self.trace.record(str(msg.uid), "failed", reason=sanitize_failure(e), target=tg_dest)
             self.logger.error("Error occurred while processing message from slave channel.\nMessage: %s\n%s\n%s",
                               repr(msg), repr(e), traceback.format_exc())
             self._report_delivery_failure(
@@ -629,7 +710,7 @@ class SlaveMessageProcessor(LocaleMixin):
             t += html.escape(text[prev:])
             return t
         elif text:
-            return html.escape(text)
+            return normalize_wechat_html(text)
         return text
 
     def slave_message_text(self, msg: Message, tg_dest: TelegramChatID,

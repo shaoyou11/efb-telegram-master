@@ -174,6 +174,9 @@ class TelegramChannel(MasterChannel):
                 ("health", self.operations_ui.health),
                 ("delivery", self.operations_ui.delivery),
                 ("diagnostic", self.operations_ui.diagnostic),
+                ("trace", self.operations_ui.trace),
+                ("issues", self.operations_ui.issues),
+                ("digest", self.operations_ui.digest),
                 ("version", self.operations_ui.version),
                 ("backup_info", self.operations_ui.backup_info),
                 ("filetest", self.operations_ui.filetest),
@@ -677,6 +680,8 @@ class TelegramChannel(MasterChannel):
 
     def stop_polling(self):
         self.logger.debug("Gracefully stopping %s (%s).", self.channel_name, self.channel_id)
+        self.slave_messages.digest_manager.close()
+        self.slave_messages.scheduler.close()
         self.rpc_utilities.shutdown()
         self.bot_manager.graceful_stop()
         self.master_messages.stop_worker()

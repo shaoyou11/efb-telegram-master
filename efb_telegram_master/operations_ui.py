@@ -13,6 +13,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackContext
 
 from .utils import chat_id_str_to_id
+from .issues import build_issues
 
 
 SENSITIVE_KEY = re.compile(r"(?i)^(token|password|passwd|secret|api_hash|api_id|vncpass)$")
@@ -570,6 +571,7 @@ class OperationsUI:
         capacity = load_json(self.data_root / "capacity-audit-latest.json")
         upstream = load_json(self.data_root / "upstream-audit-latest.json")
         watchdog = self._watchdog_state()
+        login_event = watchdog.get("login_event") if isinstance(watchdog.get("login_event"), dict) else {}
         spoiler_store = getattr(self.channel, "author_name_spoiler_store", None)
         spoiler_enabled = bool(getattr(spoiler_store, "enabled", False))
         last_delivery = format_timestamp(
@@ -581,6 +583,9 @@ class OperationsUI:
         free_percent = disk.get("free_percent")
         disk_text = f"{float(free_percent):.2f}%" if isinstance(free_percent, (int, float)) else "等待检查"
         queue = delivery_summary(self.data_root, reconcile)
+        slave_messages = getattr(self.channel, "slave_messages", None)
+        scheduler = slave_messages.scheduler.snapshot() if slave_messages else {}
+        trace = slave_messages.trace.latest() if slave_messages else None
         updates = upstream.get("update_count", 0)
         if watchdog:
             recovery_text = (
@@ -603,6 +608,12 @@ class OperationsUI:
             recovery_window = "等待检查"
             recovery_config = "等待检查"
             diagnostic_retention = "等待检查"
+        login_labels = {"manual": "手动登录", "automatic": "自动恢复"}
+        login_text = (
+            f"{login_labels.get(login_event.get('source'), login_event.get('source', '暂无'))} "
+            f"{format_timestamp(login_event.get('created_at'))}"
+            if login_event else "暂无"
+        )
         return (
             "EFB 综合状态\n\n"
             f"EFB 运行时间：{format_uptime(self.started_at)}\n"
@@ -614,9 +625,12 @@ class OperationsUI:
             f"恢复时段：{recovery_window}\n"
             f"恢复配置：{recovery_config}\n"
             f"失败诊断：{diagnostic_retention}\n"
+            f"最近登录事件：{login_text}\n"
             f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
             f"最近消息活动：{last_delivery}\n"
             f"投递队列：待处理 {queue['pending']}｜失败 {queue['failed']}\n"
+            f"会话队列：活跃 {scheduler.get('active_chats', 0)}｜联系人 {scheduler.get('contact_chats', 0)}｜群聊 {scheduler.get('group_chats', 0)}\n"
+            f"最近流转阶段：{trace.get('stage', '暂无') if trace else '暂无'}\n"
             f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
             f"映射数据库：{database_status}\n"
             f"NAS 磁盘剩余：{disk_text}\n"
@@ -631,7 +645,7 @@ class OperationsUI:
                 update,
                 self.health_text(),
                 "status",
-                actions=(("投递明细", "delivery"), ("失败诊断", "diagnostic")),
+                actions=(("投递明细", "delivery"), ("异常中心", "issues"), ("失败诊断", "diagnostic")),
             )
 
     def status(self, update: Update, context: CallbackContext):
@@ -789,6 +803,78 @@ class OperationsUI:
         except Exception as error:
             self._send(update, f"失败诊断图片发送失败：{redact_error(error)}")
 
+    @staticmethod
+    def _target_key(update: Update) -> str:
+        chat = update.effective_chat
+        message = update.effective_message
+        chat_id = getattr(chat, "id", "unknown")
+        thread_id = getattr(message, "message_thread_id", None)
+        return f"tg:{chat_id}:{thread_id or 0}"
+
+    def trace(self, update: Update, context: CallbackContext):
+        if not self._allowed(update):
+            return
+        trace_store = getattr(getattr(self.channel, "slave_messages", None), "trace", None)
+        if trace_store is None:
+            self._send(update, "EFB 消息追踪暂不可用。")
+            return
+        uid = context.args[0] if context and context.args else None
+        events = trace_store.get(uid) if uid else []
+        title = f"消息 {uid}" if uid else "最近消息"
+        if not events:
+            latest = trace_store.latest()
+            if latest:
+                uid = latest.get("uid")
+                events = trace_store.get(uid)
+                title = f"消息 {uid}"
+        if not events:
+            self._send(update, "EFB 消息追踪\n\n当前没有可查看的记录。", actions=(("关闭", "close"),))
+            return
+        lines = ["EFB 消息追踪", "", title]
+        for event in events:
+            lines.append(f"{format_timestamp(event.get('at'))}｜{event.get('stage')}" +
+                         (f"｜{event.get('reason')}" if event.get('reason') else ""))
+        self._send(update, "\n".join(lines), actions=(("关闭", "close"),))
+
+    def issues(self, update: Update, _context: CallbackContext):
+        if not self._allowed(update):
+            return
+        findings = build_issues(
+            self.data_root,
+            db=getattr(self.channel, "db", None),
+        )
+        if not findings:
+            self._send(update, "EFB 异常中心\n\n当前没有需要处理的问题。", actions=(("关闭", "close"),))
+            return
+        lines = ["EFB 异常中心", ""]
+        for index, item in enumerate(findings[:20], 1):
+            lines.extend([
+                f"{index}. [{item['severity']}] {item['kind']}",
+                f"对象：{item['recipient']}",
+                f"操作：{item['action']}｜{item['detail']}",
+                "",
+            ])
+        self._send(update, "\n".join(lines).rstrip(), "issues", actions=(("查看投递明细", "delivery"),))
+
+    def digest(self, update: Update, context: CallbackContext):
+        if not self._allowed(update):
+            return
+        manager = getattr(getattr(self.channel, "slave_messages", None), "digest_manager", None)
+        if manager is None:
+            self._send(update, "静默摘要暂不可用。")
+            return
+        key = self._target_key(update)
+        argument = (context.args[0].lower() if context and context.args else "status")
+        if argument in {"on", "开启"}:
+            manager.store.set_enabled(key, True)
+            text = "当前会话已开启静默摘要，每小时汇总一次。\n不会标记微信已读。"
+        elif argument in {"off", "关闭"}:
+            manager.store.set_enabled(key, False)
+            text = "当前会话已关闭静默摘要，恢复逐条接收。"
+        else:
+            text = f"当前会话静默摘要：{'开启' if manager.enabled(key) else '关闭'}\n\n用法：/digest on 或 /digest off"
+        self._send(update, text, actions=(("关闭", "close"),))
+
     def version(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):
             return
@@ -854,6 +940,9 @@ class OperationsUI:
             "delivery_clear": self.delivery_clear_confirm,
             "delivery_clear_confirm": self.delivery_clear_execute,
             "diagnostic": self.diagnostic,
+            "trace": self.trace,
+            "issues": self.issues,
+            "digest": self.digest,
             "backup": self.backup_info,
             "filetest": self.filetest,
             "security": self.security,
