@@ -7,6 +7,7 @@ from efb_telegram_master.operations_ui import (
     OperationsUI,
     _human_size,
     backup_summary,
+    clear_invalid_delivery_records,
     delivery_details,
     format_timestamp,
     format_uptime,
@@ -113,11 +114,15 @@ def test_delivery_details_exposes_pending_and_failed_items(tmp_path):
     pending_path.mkdir(parents=True)
     (pending_path / "pending-files.json").write_text(json.dumps({
         "/comwechat/Files/": {
+            "author_alias": "耶巴蒂",
+            "author_name": "最幸福的事",
+            "chat_name": "子擎玩家交流群2",
+            "chat_kind": "group",
             "msg": {
                 "type": "video",
                 "msgid": "5626155171855065761",
-                "filename": "wechat-channel.mp4",
                 "timestamp": 1900,
+                "text": "待处理视频",
             },
         },
     }), encoding="utf-8")
@@ -135,6 +140,11 @@ def test_delivery_details_exposes_pending_and_failed_items(tmp_path):
             "error": "Flood control exceeded",
             "created_at": 1900,
             "expires": 3000,
+            "chat": "honus.comwechat 48182341636@chatroom",
+            "author_uid": "wxid_sender",
+            "tg_dest": -1001234567890,
+            "thread_id": 22,
+            "text": "完整失败消息内容",
         },
         "missing-token": {
             "uid": "9876543210",
@@ -154,10 +164,19 @@ def test_delivery_details_exposes_pending_and_failed_items(tmp_path):
     assert details["pending"][0]["can_retry"] is False
     assert "待处理 #1" in text
     assert "类型：视频" in text
-    assert "wechat-channel.mp4" in text
+    assert "文件：未记录" in text
+    assert "微信会话：子擎玩家交流群2" in text
+    assert "发送者：最幸福的事（耶巴蒂）" in text
+    assert "消息：5626155171855065761" in text
+    assert "内容：待处理视频" in text
     assert "无法继续" in text
     assert "失败 #1" in text
     assert "原因：Flood control exceeded" in text
+    assert "微信会话：honus.comwechat 48182341636@chatroom" in text
+    assert "发送者：wxid_sender" in text
+    assert "发送到：Telegram chat_id=-1001234567890，话题=22" in text
+    assert "消息：1234567890" in text
+    assert "内容：完整失败消息内容" in text
     assert "失败 #2" in text
     assert "原文件已不存在，无法继续推送" in text
 
@@ -190,7 +209,59 @@ def test_delivery_markup_only_offers_retry_for_readable_files(tmp_path):
     assert "retry:missing-token" not in callbacks
     assert "ops:delivery" in callbacks
     assert "ops:diagnostic" in callbacks
+    assert "ops:delivery_clear" in callbacks
     assert "ops:close" in callbacks
+
+
+def test_clear_invalid_delivery_records_only_removes_unreadable_records(tmp_path):
+    pending_path = tmp_path / "profiles/comwechat/honus.comwechat"
+    pending_path.mkdir(parents=True)
+    (pending_path / "pending-files.json").write_text(json.dumps({
+        "missing": {"path": str(tmp_path / "missing")},
+        "readable": {"path": str(tmp_path / "available.jpg")},
+    }), encoding="utf-8")
+    (tmp_path / "available.jpg").write_bytes(b"image")
+
+    state = tmp_path / "operations/state"
+    state.mkdir(parents=True)
+    (state / "failed-deliveries.json").write_text(json.dumps({
+        "missing-token": {"path": str(tmp_path / "missing.mp4"), "expires": 1000},
+        "readable-token": {"path": str(tmp_path / "available.jpg"), "expires": 3000},
+    }), encoding="utf-8")
+
+    result = clear_invalid_delivery_records(tmp_path, now=2000)
+
+    assert result["pending"] == 1
+    assert result["failed"] == 1
+    assert result["backup"].is_file()
+    assert json.loads((pending_path / "pending-files.json").read_text()) == {
+        "readable": {"path": str(tmp_path / "available.jpg")}
+    }
+    assert json.loads((state / "failed-deliveries.json").read_text()) == {
+        "readable-token": {"path": str(tmp_path / "available.jpg"), "expires": 3000}
+    }
+    assert (tmp_path / "available.jpg").is_file()
+
+
+def test_pending_target_uses_topic_association():
+    ui = OperationsUI.__new__(OperationsUI)
+    ui.channel = SimpleNamespace(db=SimpleNamespace(
+        get_topic_assocs=lambda source_uid: [(-1001234567890, 22)],
+        get_chat_assoc=lambda **kwargs: [],
+    ))
+    details = {
+        "pending": [{
+            "source_uid": "honus.comwechat 48182341636@chatroom",
+            "telegram_target": "待处理记录未保存 Telegram 目标",
+        }],
+        "failed": [],
+    }
+
+    ui._resolve_delivery_targets(details)
+
+    assert details["pending"][0]["telegram_target"] == (
+        "Telegram chat_id=-1001234567890，话题=22"
+    )
 
 
 def test_diagnostic_path_is_scoped_to_efb_data_root(tmp_path):

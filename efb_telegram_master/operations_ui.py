@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import tempfile
 import time
 from datetime import datetime
 from importlib import metadata
@@ -10,6 +11,8 @@ from urllib import request
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackContext
+
+from .utils import chat_id_str_to_id
 
 
 SENSITIVE_KEY = re.compile(r"(?i)^(token|password|passwd|secret|api_hash|api_id|vncpass)$")
@@ -154,6 +157,61 @@ def _short_identifier(value) -> str:
     return text if len(text) <= 12 else f"…{text[-8:]}"
 
 
+def _full_identifier(value) -> str:
+    return str(value or "未知")
+
+
+def _record_value(record: dict, message: dict, *keys):
+    for key in keys:
+        value = message.get(key)
+        if value not in (None, ""):
+            return value
+        value = record.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _sender_text(record: dict, message: dict) -> str:
+    name = _record_value(record, message, "author_name", "sender_name")
+    alias = _record_value(record, message, "author_alias", "sender_alias")
+    uid = _record_value(record, message, "author_uid", "sender_uid")
+    if name and alias and str(name) != str(alias):
+        return f"{name}（{alias}）"
+    return str(name or alias or uid or "未知")
+
+
+def _wechat_chat_text(record: dict, message: dict) -> str:
+    name = _record_value(record, message, "chat_name", "chat_title")
+    uid = _record_value(record, message, "chat_uid", "chat")
+    if name and uid and str(name) != str(uid):
+        return f"{name}（{uid}）"
+    return str(name or uid or "未知")
+
+
+def _telegram_target_text(record: dict) -> str:
+    destination = record.get("tg_dest")
+    if destination in (None, ""):
+        return "待处理记录未保存 Telegram 目标"
+    thread_id = record.get("thread_id")
+    thread = str(thread_id) if thread_id not in (None, "") else "主会话"
+    return f"Telegram chat_id={destination}，话题={thread}"
+
+
+def _source_uid(record: dict, message: dict) -> str:
+    value = _record_value(record, message, "source_uid", "chat")
+    if value:
+        return str(value)
+    chat_uid = _record_value(record, message, "chat_uid")
+    channel_id = os.getenv("EFB_WECHAT_CHANNEL_ID", "honus.comwechat")
+    return f"{channel_id} {chat_uid}" if chat_uid else ""
+
+
+def _message_content(record: dict, message: dict) -> str:
+    content = _record_value(record, message, "text", "content")
+    return str(content) if content not in (None, "") else "无文字内容"
+
+
 def _record_timestamp(*values):
     for value in values:
         try:
@@ -178,11 +236,24 @@ def _regular_file(path_value) -> bool:
 def _display_filename(filename, path_value) -> str:
     if filename:
         return Path(str(filename)).name or str(filename)
-    try:
-        name = Path(str(path_value)).name
-    except (OSError, ValueError, TypeError):
-        name = ""
-    return name or "未知"
+    return "未记录"
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        delete=False,
+    ) as handle:
+        json.dump(data, handle, ensure_ascii=False, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+        temporary = Path(handle.name)
+    os.replace(temporary, path)
 
 
 def diagnostic_path(data_root: Path) -> Path:
@@ -218,14 +289,21 @@ def delivery_details(data_root: Path, now=None) -> dict:
             "filename": _display_filename(
                 message.get("filename") or record.get("filename"), path_value
             ),
-            "identifier": _short_identifier(
+            "identifier": _full_identifier(
                 message.get("msgid") or message.get("uid") or record.get("msgid") or key
             ),
             "timestamp": _record_timestamp(
                 message.get("timestamp"), record.get("created_at")
             ),
+            "wechat_chat": _wechat_chat_text(record, message),
+            "sender": _sender_text(record, message),
+            "telegram_target": _telegram_target_text(record),
+            "content": _message_content(record, message),
+            "source_uid": _source_uid(record, message),
+            "path": str(path_value),
             "readable": readable,
             "can_retry": False,
+            "can_clear": not readable,
             "status": (
                 "原文件可读，等待 EFB 继续处理"
                 if readable
@@ -256,18 +334,89 @@ def delivery_details(data_root: Path, now=None) -> dict:
             "token": str(token),
             "type": _message_type_name(raw_record.get("type")),
             "filename": _display_filename(raw_record.get("filename"), raw_record.get("path")),
-            "identifier": _short_identifier(raw_record.get("uid")),
+            "identifier": _full_identifier(raw_record.get("uid")),
             "timestamp": created_at,
             "error": redact_error(raw_record.get("error") or "未知原因"),
             "readable": readable,
             "can_retry": can_retry,
+            "can_clear": not readable or expired,
+            "wechat_chat": _wechat_chat_text(raw_record, {}),
+            "sender": _sender_text(raw_record, {}),
+            "telegram_target": _telegram_target_text(raw_record),
+            "content": _message_content(raw_record, {}),
+            "source_uid": _source_uid(raw_record, {}),
+            "path": str(raw_record.get("path") or "未知"),
             "status": status,
         })
     return {"pending": pending, "failed": failed}
 
 
-def format_delivery_details(data_root: Path, now=None) -> str:
-    details = delivery_details(data_root, now=now)
+def clear_invalid_delivery_records(data_root: Path, now=None) -> dict:
+    """Remove only records whose source cannot be retried and keep a snapshot."""
+    now = time.time() if now is None else now
+    pending_path = data_root / "profiles" / "comwechat" / "honus.comwechat" / "pending-files.json"
+    failed_path = data_root / "operations" / "state" / "failed-deliveries.json"
+    pending_data = load_json(pending_path)
+    failed_data = load_json(failed_path)
+    removable_pending = []
+    for key, raw_record in pending_data.items():
+        record = raw_record if isinstance(raw_record, dict) else {}
+        message = record.get("msg") if isinstance(record.get("msg"), dict) else record
+        path_value = (
+            record.get("path")
+            or record.get("filepath")
+            or message.get("path")
+            or message.get("filepath")
+            or key
+        )
+        if not _regular_file(path_value):
+            removable_pending.append(str(key))
+
+    removable_failed = []
+    for token, raw_record in failed_data.items():
+        if not isinstance(raw_record, dict):
+            continue
+        expires = _record_timestamp(raw_record.get("expires"))
+        if not _regular_file(raw_record.get("path")) or (expires is not None and expires <= now):
+            removable_failed.append(str(token))
+
+    if not removable_pending and not removable_failed:
+        return {"pending": 0, "failed": 0, "backup": None}
+
+    state_root = data_root / "operations" / "state"
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = state_root / f"delivery-clear-{stamp}.json"
+    _atomic_write_json(backup_path, {
+        "created_at": time.time(),
+        "pending": pending_data,
+        "failed": failed_data,
+        "removed_pending": removable_pending,
+        "removed_failed": removable_failed,
+    })
+
+    if removable_pending:
+        remaining_pending = {
+            key: value
+            for key, value in pending_data.items()
+            if str(key) not in set(removable_pending)
+        }
+        _atomic_write_json(pending_path, remaining_pending)
+    if removable_failed:
+        remaining_failed = {
+            key: value
+            for key, value in failed_data.items()
+            if str(key) not in set(removable_failed)
+        }
+        _atomic_write_json(failed_path, remaining_failed)
+    return {
+        "pending": len(removable_pending),
+        "failed": len(removable_failed),
+        "backup": backup_path,
+    }
+
+
+def format_delivery_details(data_root: Path, now=None, details=None) -> str:
+    details = delivery_details(data_root, now=now) if details is None else details
     pending = details["pending"]
     failed = details["failed"]
     lines = [
@@ -281,8 +430,13 @@ def format_delivery_details(data_root: Path, now=None) -> str:
             f"待处理 #{index}",
             f"类型：{item['type']}",
             f"文件：{item['filename']}",
+            f"路径：{item['path']}",
+            f"微信会话：{item['wechat_chat']}",
+            f"发送者：{item['sender']}",
+            f"发送到：{item['telegram_target']}",
             f"消息：{item['identifier']}",
             f"时间：{format_timestamp(item['timestamp'])}",
+            f"内容：{item['content']}",
             f"状态：{item['status']}",
         ])
     for index, item in enumerate(failed, 1):
@@ -291,8 +445,13 @@ def format_delivery_details(data_root: Path, now=None) -> str:
             f"失败 #{index}",
             f"类型：{item['type']}",
             f"文件：{item['filename']}",
+            f"路径：{item['path']}",
+            f"微信会话：{item['wechat_chat']}",
+            f"发送者：{item['sender']}",
+            f"发送到：{item['telegram_target']}",
             f"消息：{item['identifier']}",
             f"时间：{format_timestamp(item['timestamp'])}",
+            f"内容：{item['content']}",
             f"原因：{item['error']}",
             f"状态：{item['status']}",
         ])
@@ -488,22 +647,119 @@ class OperationsUI:
                         callback_data=f"retry:{item['token']}",
                     )
                 ])
+        clearable = sum(
+            1
+            for item in details.get("pending", []) + details.get("failed", [])
+            if item.get("can_clear")
+        )
+        if clearable:
+            rows.append([
+                InlineKeyboardButton(
+                    f"取消失效记录（{clearable}）",
+                    callback_data="ops:delivery_clear",
+                )
+            ])
         rows.append([
             InlineKeyboardButton("刷新明细", callback_data="ops:delivery"),
             InlineKeyboardButton("失败诊断", callback_data="ops:diagnostic"),
         ])
-        rows.append([InlineKeyboardButton("关闭", callback_data="ops:close")])
+        rows.append([InlineKeyboardButton("关闭页面", callback_data="ops:close")])
         return InlineKeyboardMarkup(rows)
+
+    def _resolve_delivery_targets(self, details: dict) -> None:
+        """Fill pending targets from the durable EFB chat/topic associations."""
+        db = getattr(self.channel, "db", None)
+        if db is None:
+            return
+        for item in details.get("pending", []):
+            if item.get("telegram_target") != "待处理记录未保存 Telegram 目标":
+                continue
+            source_uid = item.get("source_uid")
+            if not source_uid:
+                continue
+            try:
+                topics = db.get_topic_assocs(source_uid)
+                if topics:
+                    item["telegram_target"] = "；".join(
+                        f"Telegram chat_id={chat_id}，话题={thread_id}"
+                        for chat_id, thread_id in topics
+                    )
+                    continue
+                masters = db.get_chat_assoc(slave_uid=source_uid)
+                targets = []
+                for master_uid in masters:
+                    try:
+                        _, chat_id, _ = chat_id_str_to_id(master_uid)
+                        targets.append(f"Telegram chat_id={chat_id}，主会话")
+                    except (IndexError, TypeError, ValueError):
+                        targets.append(f"Telegram 目标={master_uid}")
+                if targets:
+                    item["telegram_target"] = "；".join(targets)
+            except Exception:
+                continue
 
     def delivery(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):
             return
-        text = format_delivery_details(self.data_root)
-        markup = self.delivery_markup(delivery_details(self.data_root))
+        details = delivery_details(self.data_root)
+        self._resolve_delivery_targets(details)
+        text = format_delivery_details(self.data_root, details=details)
+        markup = self.delivery_markup(details)
         if update.callback_query:
             update.callback_query.edit_message_text(text, reply_markup=markup)
         else:
             update.effective_message.reply_text(text, reply_markup=markup)
+
+    def delivery_clear_confirm(self, update: Update, _context: CallbackContext):
+        if not self._allowed(update):
+            return
+        details = delivery_details(self.data_root)
+        clearable = sum(
+            1
+            for item in details.get("pending", []) + details.get("failed", [])
+            if item.get("can_clear")
+        )
+        if not clearable:
+            self._send(update, "当前没有可以取消的失效记录。", actions=(("投递明细", "delivery"),))
+            return
+        self._send(
+            update,
+            "确认取消失效投递记录？\n\n"
+            f"将取消 {clearable} 条无法继续投递的记录。\n"
+            "只移除队列记录，不删除微信文件、Telegram 聊天或可重试附件。\n"
+            "执行前会在 EFB 状态目录保留一份快照。",
+            actions=(
+                ("确认取消", "delivery_clear_confirm"),
+                ("返回明细", "delivery"),
+            ),
+        )
+
+    def delivery_clear_execute(self, update: Update, _context: CallbackContext):
+        if not self._allowed(update):
+            return
+        before = delivery_details(self.data_root)
+        failed_tokens = [
+            item["token"]
+            for item in before.get("failed", [])
+            if item.get("can_clear")
+        ]
+        result = clear_invalid_delivery_records(self.data_root)
+        failure_store = getattr(getattr(self.channel, "slave_messages", None), "failure_store", None)
+        if failure_store is not None:
+            for token in failed_tokens:
+                failure_store.remove(token)
+        backup = result.get("backup")
+        if not result.get("pending") and not result.get("failed"):
+            self._send(update, "没有需要取消的失效记录。", actions=(("投递明细", "delivery"),))
+            return
+        self._send(
+            update,
+            "失效投递记录已取消\n\n"
+            f"待处理：{result['pending']} 条\n"
+            f"失败：{result['failed']} 条\n"
+            f"快照：{backup}",
+            actions=(("查看投递明细", "delivery"),),
+        )
 
     def diagnostic(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):
@@ -595,6 +851,8 @@ class OperationsUI:
             "health": self.health,
             "status": self.status,
             "delivery": self.delivery,
+            "delivery_clear": self.delivery_clear_confirm,
+            "delivery_clear_confirm": self.delivery_clear_execute,
             "diagnostic": self.diagnostic,
             "backup": self.backup_info,
             "filetest": self.filetest,
