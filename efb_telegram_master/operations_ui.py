@@ -186,6 +186,11 @@ class OperationsUI:
     def markup(refresh: str = "", include_bridge: bool = False) -> InlineKeyboardMarkup:
         rows = []
         if include_bridge:
+            rows.append([
+                InlineKeyboardButton("投递明细", callback_data="ops:delivery"),
+                InlineKeyboardButton("异常中心", callback_data="ops:errors"),
+                InlineKeyboardButton("失败诊断", callback_data="ops:diagnostic"),
+            ])
             rows.append([InlineKeyboardButton("Bridge 队列", callback_data="bridgeq:home")])
         row = []
         if refresh:
@@ -299,6 +304,57 @@ class OperationsUI:
         if self._allowed(update):
             self._send(update, self.health_text(), "status", include_bridge=True)
 
+    def delivery_detail(self, update: Update, _context: CallbackContext):
+        if not self._allowed(update):
+            return
+        state_root = self.data_root / "operations" / "state"
+        delivery = load_json(state_root / "delivery.json")
+        reconcile = load_json(self.data_root / "delivery-reconcile-latest.json")
+        queue = delivery_summary(self.data_root, reconcile)
+        self._send(
+            update,
+            "EFB 投递明细\n\n"
+            f"待处理：{queue['pending']} 条\n"
+            f"失败：{queue['failed']} 条\n"
+            f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
+            f"最近入站：{format_timestamp(delivery.get('last_inbound_at'))}\n"
+            f"最近投递：{format_timestamp(delivery.get('last_delivered_at'))}\n"
+            f"最近失败：{format_timestamp(delivery.get('last_failed_at'))}",
+            "delivery",
+        )
+
+    def errors(self, update: Update, _context: CallbackContext):
+        if not self._allowed(update):
+            return
+        state_root = self.data_root / "operations" / "state"
+        health = load_json(state_root / "health-guard.json")
+        reconcile = load_json(self.data_root / "delivery-reconcile-latest.json")
+        queue = delivery_summary(self.data_root, reconcile)
+        watchdog = self._watchdog_state()
+        self._send(
+            update,
+            "EFB 异常中心\n\n"
+            f"微信：{self._wechat_login()}\n"
+            f"服务健康：{'正常' if health.get('healthy') else health.get('reason', '未检查')}\n"
+            f"最近守护动作：{health.get('action', '暂无')}\n"
+            f"自动恢复：{('总开关开启' if watchdog.get('master_enabled') else '总开关关闭') if watchdog else '等待检查'}\n"
+            f"待处理投递：{queue['pending']} 条\n"
+            f"失败投递：{queue['failed']} 条\n"
+            "详情请查看日志或 Bridge 队列。",
+            "errors",
+        )
+
+    def diagnostic(self, update: Update, _context: CallbackContext):
+        if not self._allowed(update):
+            return
+        path = self.data_root / "watchdog" / "diagnostics" / "last-login-failure.png"
+        if not path.is_file():
+            self._send(update, "EFB 失败诊断\n\n当前没有保存失败诊断画面。", "diagnostic")
+            return
+        caption = f"EFB 最新失败诊断画面\n时间：{format_timestamp(path.stat().st_mtime)}"
+        with path.open("rb") as photo:
+            update.effective_message.reply_photo(photo=photo, caption=caption)
+
     def status(self, update: Update, context: CallbackContext):
         self.health(update, context)
 
@@ -369,6 +425,9 @@ class OperationsUI:
         handlers = {
             "health": self.health,
             "status": self.status,
+            "delivery": self.delivery_detail,
+            "errors": self.errors,
+            "diagnostic": self.diagnostic,
             "backup": self.backup_info,
             "filetest": self.filetest,
             "security": self.security,
