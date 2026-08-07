@@ -177,7 +177,10 @@ class OperationsUI:
         self.channel = channel
         self.data_root = Path(os.getenv("EFB_DATA_ROOT", "/data"))
         self.started_at = time.time()
-        self.bridge_queue_ui = BridgeQueueUI(channel)
+        self.bridge_queue_ui = BridgeQueueUI(
+            channel,
+            settings=getattr(channel, "bridge_queue_settings", None),
+        )
 
     @staticmethod
     def markup(refresh: str = "", include_bridge: bool = False) -> InlineKeyboardMarkup:

@@ -3,9 +3,11 @@
 import html
 import logging
 import mimetypes
+import os
 import time
 from gettext import NullTranslations, translation
 from importlib.resources import files
+from pathlib import Path
 from typing import Optional, List, Callable
 from xmlrpc.server import SimpleXMLRPCServer
 
@@ -33,6 +35,7 @@ from . import utils as etm_utils
 from .__version__ import __version__
 from .bot_manager import TelegramBotManager
 from .bridge_dead_letter import BridgeDeadLetterGuard
+from .bridge_queue import BridgeQueueSettings
 from .author_name_spoiler import AuthorNameSpoilerStore, AuthorNameSpoilerUI
 from .chat_binding import ChatBindingManager
 from .chat_destination_cache import ChatDestinationCache
@@ -141,6 +144,10 @@ class TelegramChannel(MasterChannel):
         self.bot_manager: TelegramBotManager = TelegramBotManager(self)
         self.commands: CommandsManager = CommandsManager(self)
         self.chat_binding: ChatBindingManager = ChatBindingManager(self)
+        data_root = Path(os.getenv("EFB_DATA_ROOT", "/data"))
+        self.bridge_queue_settings = BridgeQueueSettings(
+            data_root / "operations" / "state" / "bridge-queue-settings.json"
+        )
         self.delivery_policy_ui = DeliveryPolicyUI(self)
         self.operations_ui = OperationsUI(self)
         self.slave_messages: SlaveMessageProcessor = SlaveMessageProcessor(self)
@@ -191,7 +198,10 @@ class TelegramChannel(MasterChannel):
         self.wechat_control = WeChatControl(self)
         self.member_color_ui = MemberColorUI(self)
         self.author_name_spoiler_ui = AuthorNameSpoilerUI(self)
-        self.bridge_dead_letter_guard = BridgeDeadLetterGuard(self)
+        self.bridge_dead_letter_guard = BridgeDeadLetterGuard(
+            self,
+            settings=self.bridge_queue_settings,
+        )
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.bot_manager.session_expired))
         self.bot_manager.dispatcher.add_handler(

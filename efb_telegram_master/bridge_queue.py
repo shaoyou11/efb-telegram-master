@@ -33,17 +33,21 @@ class BridgeQueueSettings:
 
     @enabled.setter
     def enabled(self, value: bool) -> None:
-        self._enabled = bool(value)
-        self.save()
+        if not isinstance(value, bool):
+            raise ValueError("management_enabled must be a boolean")
+        self.save(value)
+        self._enabled = value
 
     def _load(self) -> bool:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
             return False
-        return bool(payload.get("management_enabled", False)) if isinstance(payload, dict) else False
+        value = payload.get("management_enabled", False) if isinstance(payload, dict) else False
+        return value is True
 
-    def save(self) -> None:
+    def save(self, enabled: Optional[bool] = None) -> None:
+        value = self._enabled if enabled is None else enabled
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:
@@ -54,7 +58,7 @@ class BridgeQueueSettings:
                 prefix=f".{self.path.name}.",
                 delete=False,
             ) as handle:
-                json.dump({"management_enabled": self._enabled}, handle)
+                json.dump({"management_enabled": value}, handle)
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -105,14 +109,38 @@ class BridgeQueueClient:
         return self._request("/healthz")
 
     def active(self, limit: int = 10) -> List[Dict[str, Any]]:
-        result = self._request(f"/v1/messages/active?limit={min(100, max(1, int(limit)))}")
+        messages, _ = self.active_page(limit)
+        return messages
+
+    def active_page(self, limit: int = 10, offset: int = 0):
+        result = self._request(
+            f"/v1/messages/active?limit={min(100, max(1, int(limit)))}"
+            f"&offset={max(0, int(offset))}"
+        )
         messages = result.get("messages", [])
-        return messages if isinstance(messages, list) else []
+        total = result.get("total", len(messages))
+        try:
+            total = max(0, int(total))
+        except (TypeError, ValueError):
+            total = len(messages)
+        return (messages if isinstance(messages, list) else [], total)
 
     def dead(self, limit: int = 10) -> List[Dict[str, Any]]:
-        result = self._request(f"/v1/messages/dead?limit={min(100, max(1, int(limit)))}")
+        messages, _ = self.dead_page(limit)
+        return messages
+
+    def dead_page(self, limit: int = 10, offset: int = 0):
+        result = self._request(
+            f"/v1/messages/dead?limit={min(100, max(1, int(limit)))}"
+            f"&offset={max(0, int(offset))}"
+        )
         messages = result.get("messages", [])
-        return messages if isinstance(messages, list) else []
+        total = result.get("total", len(messages))
+        try:
+            total = max(0, int(total))
+        except (TypeError, ValueError):
+            total = len(messages)
+        return (messages if isinstance(messages, list) else [], total)
 
     def retry_active(self, message_id: str) -> str:
         result = self._request(
@@ -132,15 +160,37 @@ class BridgeQueueClient:
         return str(result.get("result") or "not_found")
 
     def requeue_all_dead(self) -> int:
+        return len(self.requeue_all_dead_ids())
+
+    def requeue_all_dead_ids(self) -> List[str]:
         result = self._request("/v1/messages/requeue-all-dead", {})
+        message_ids = result.get("message_ids", [])
+        if not isinstance(message_ids, list):
+            return []
+        return [str(item) for item in message_ids if isinstance(item, str) and item]
+
+    def discard_all_dead(self, reason: str = "admin") -> int:
+        return len(self.discard_all_dead_ids(reason))
+
+    def discard_all_dead_ids(self, reason: str = "admin") -> List[str]:
+        result = self._request(
+            "/v1/messages/discard-all-dead", {"reason": str(reason)}
+        )
+        message_ids = result.get("message_ids", [])
+        if not isinstance(message_ids, list):
+            return []
+        return [str(item) for item in message_ids if isinstance(item, str) and item]
+
+    def retry_all_active(self) -> int:
+        result = self._request("/v1/messages/retry-all-active", {})
         try:
-            return int(result.get("requeued", 0))
+            return int(result.get("retried", 0))
         except (TypeError, ValueError):
             return 0
 
-    def discard_all_dead(self, reason: str = "admin") -> int:
+    def discard_all_active(self, reason: str = "admin") -> int:
         result = self._request(
-            "/v1/messages/discard-all-dead", {"reason": str(reason)}
+            "/v1/messages/discard-all-active", {"reason": str(reason)}
         )
         try:
             return int(result.get("discarded", 0))

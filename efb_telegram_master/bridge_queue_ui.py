@@ -91,8 +91,14 @@ class BridgeQueueUI:
         )
 
     @staticmethod
-    def active_text(items: List[Dict[str, Any]], page: int = 0) -> str:
-        page_items, total_pages = _page_slice(items, page)
+    def active_text(
+        items: List[Dict[str, Any]], page: int = 0, total: Optional[int] = None
+    ) -> str:
+        if total is None:
+            page_items, total_pages = _page_slice(items, page)
+        else:
+            page_items = items
+            total_pages = max(1, (int(total) + PAGE_SIZE - 1) // PAGE_SIZE)
         lines = [f"Bridge 活动队列（第 {min(page + 1, total_pages)}/{total_pages} 页）", ""]
         if not page_items:
             lines.append("当前没有活动消息。")
@@ -106,8 +112,14 @@ class BridgeQueueUI:
         return "\n".join(lines)
 
     @staticmethod
-    def dead_text(items: List[Dict[str, Any]], page: int = 0) -> str:
-        page_items, total_pages = _page_slice(items, page)
+    def dead_text(
+        items: List[Dict[str, Any]], page: int = 0, total: Optional[int] = None
+    ) -> str:
+        if total is None:
+            page_items, total_pages = _page_slice(items, page)
+        else:
+            page_items = items
+            total_pages = max(1, (int(total) + PAGE_SIZE - 1) // PAGE_SIZE)
         lines = [f"Bridge 死信队列（第 {min(page + 1, total_pages)}/{total_pages} 页）", ""]
         if not page_items:
             lines.append("当前没有死信。")
@@ -119,9 +131,12 @@ class BridgeQueueUI:
         return "\n".join(lines)
 
     def _allowed(self, update: Update) -> bool:
+        chat = getattr(update, "effective_chat", None)
         return bool(
             update.effective_user
             and update.effective_user.id in self.channel.config["admins"]
+            and chat is not None
+            and getattr(chat, "type", "") == "private"
         )
 
     @staticmethod
@@ -147,8 +162,13 @@ class BridgeQueueUI:
         items: List[Dict[str, Any]],
         page: int,
         enabled: bool,
+        total: Optional[int] = None,
     ) -> InlineKeyboardMarkup:
-        page_items, total_pages = _page_slice(items, page)
+        if total is None:
+            page_items, total_pages = _page_slice(items, page)
+        else:
+            page_items = items
+            total_pages = max(1, (int(total) + PAGE_SIZE - 1) // PAGE_SIZE)
         rows = []
         for item in page_items:
             message_id = str(item.get("id") or "")
@@ -156,6 +176,11 @@ class BridgeQueueUI:
             label = _safe_text(message_id, 10)
             if kind == "active" and state == "inflight":
                 rows.append([InlineKeyboardButton(f"{label}：处理中", callback_data="bridgeq:noop")])
+            elif kind == "active" and state == "staged":
+                rows.append([InlineKeyboardButton(
+                    f"{label}：暂存中，等待附件/排序",
+                    callback_data="bridgeq:noop",
+                )])
             elif enabled:
                 if kind == "active":
                     rows.append([
@@ -171,6 +196,11 @@ class BridgeQueueUI:
             rows.append([
                 InlineKeyboardButton("全部重新投递", callback_data="bridgeq:requeue-all"),
                 InlineKeyboardButton("全部放弃", callback_data="bridgeq:discard-all"),
+            ])
+        if kind == "active" and enabled:
+            rows.append([
+                InlineKeyboardButton("重试全部待投递", callback_data="bridgeq:retry-all-active"),
+                InlineKeyboardButton("放弃全部可处理", callback_data="bridgeq:discard-all-active"),
             ])
         navigation = []
         if page > 0:
@@ -220,12 +250,24 @@ class BridgeQueueUI:
 
     def _show_page(self, update: Update, kind: str, page: int):
         try:
-            items = self.client.active(100) if kind == "active" else self.client.dead(100)
+            offset = max(0, page) * PAGE_SIZE
+            if kind == "active":
+                items, total = self.client.active_page(PAGE_SIZE, offset)
+            else:
+                items, total = self.client.dead_page(PAGE_SIZE, offset)
         except BridgeQueueError:
             self._error(update)
             return
-        text = self.active_text(items, page) if kind == "active" else self.dead_text(items, page)
-        self._edit(update, text, self._page_markup(kind, items, page, self.settings.enabled))
+        text = (
+            self.active_text(items, page, total)
+            if kind == "active"
+            else self.dead_text(items, page, total)
+        )
+        self._edit(
+            update,
+            text,
+            self._page_markup(kind, items, page, self.settings.enabled, total),
+        )
 
     def command(self, update: Update, _context: CallbackContext):
         if self._allowed(update):
@@ -244,9 +286,10 @@ class BridgeQueueUI:
             "requeue": "重新投递这条死信",
             "discard": "放弃这条队列记录",
         }
+        note = "\n\n放弃后会保留去重标记，但不会再保存消息正文。" if action == "discard" else ""
         self._edit(
             update,
-            f"确认：{labels.get(action, '执行此操作')}？\n\n放弃后会保留去重标记，但不会再保存消息正文。",
+            f"确认：{labels.get(action, '执行此操作')}？{note}",
             self._confirm_markup(action, message_id),
         )
 
@@ -260,6 +303,7 @@ class BridgeQueueUI:
                 text = {
                     "retried": "已重新加入投递队列。",
                     "inflight": "消息正在处理中，未直接改动。",
+                    "staged": "消息仍在暂存阶段，等待附件准备或排序完成。",
                     "not_found": "活动队列中已找不到这条消息。",
                 }.get(result, "活动消息状态未改变。")
             elif action == "requeue":
@@ -286,9 +330,13 @@ class BridgeQueueUI:
             return
         update.callback_query.answer()
         label = "重新投递全部死信" if action == "requeue-all" else "放弃全部死信"
+        if action == "retry-all-active":
+            label = "重试全部待投递消息"
+        elif action == "discard-all-active":
+            label = "放弃全部可处理活动消息"
         self._edit(
             update,
-            f"确认：{label}？\n\n这会处理当前全部死信记录。",
+            f"确认：{label}？\n\n处理中消息不会被强行改动。",
             self._confirm_markup(action),
         )
 
@@ -297,15 +345,24 @@ class BridgeQueueUI:
             self._blocked(update)
             return
         try:
-            dead_ids = [str(item.get("id")) for item in self.client.dead(100) if item.get("id")]
             if action == "requeue-all":
-                count = self.client.requeue_all_dead()
+                message_ids = self.client.requeue_all_dead_ids()
+                count = len(message_ids)
                 text = f"已重新投递 {count} 条死信。"
-            else:
-                count = self.client.discard_all_dead("telegram-admin")
+            elif action == "discard-all":
+                message_ids = self.client.discard_all_dead_ids("telegram-admin")
+                count = len(message_ids)
                 text = f"已放弃 {count} 条死信，并保留去重标记。"
+            elif action == "retry-all-active":
+                count = self.client.retry_all_active()
+                message_ids = []
+                text = f"已重试 {count} 条待投递消息；暂存和处理中消息未改动。"
+            else:
+                count = self.client.discard_all_active("telegram-admin")
+                message_ids = []
+                text = f"已放弃 {count} 条可处理活动记录，并保留去重标记；处理中消息未改动。"
             if count:
-                for message_id in dead_ids:
+                for message_id in message_ids:
                     self._forget_dead(message_id)
         except BridgeQueueError:
             text = "操作失败，Bridge 暂时不可用。"
@@ -331,7 +388,11 @@ class BridgeQueueUI:
             self._show_home(update)
             return
         if data == "bridgeq:toggle":
-            self.settings.enabled = not self.settings.enabled
+            try:
+                self.settings.enabled = not self.settings.enabled
+            except (OSError, ValueError):
+                query.answer("管理开关保存失败", show_alert=True)
+                return
             query.answer("管理开关已保存")
             self._show_home(update)
             return
@@ -351,12 +412,23 @@ class BridgeQueueUI:
                 self._confirm_item(update, action, message_id)
                 return
             if action in ("retry-confirm", "requeue-confirm", "discard-confirm"):
-                self._execute_item(update, action.removesuffix("-confirm"), message_id)
+                self._execute_item(update, action[:-8], message_id)
                 return
-        if data in ("bridgeq:requeue-all", "bridgeq:discard-all"):
-            self._confirm_batch(update, data.removeprefix("bridgeq:"))
+        if data in (
+            "bridgeq:requeue-all",
+            "bridgeq:discard-all",
+            "bridgeq:retry-all-active",
+            "bridgeq:discard-all-active",
+        ):
+            self._confirm_batch(update, data[8:])
             return
-        if data in ("bridgeq:requeue-all-confirm", "bridgeq:discard-all-confirm"):
-            self._execute_batch(update, data.removeprefix("bridgeq:").removesuffix("-confirm"))
+        if data in (
+            "bridgeq:requeue-all-confirm",
+            "bridgeq:discard-all-confirm",
+            "bridgeq:retry-all-active-confirm",
+            "bridgeq:discard-all-active-confirm",
+        ):
+            action = data[8:]
+            self._execute_batch(update, action[:-8])
             return
         query.answer("无效操作", show_alert=True)

@@ -69,9 +69,25 @@ class FakeClient:
         self.calls.append(("requeue_all_dead",))
         return 4
 
+    def requeue_all_dead_ids(self):
+        self.calls.append(("requeue_all_dead_ids",))
+        return ["dead-1", "dead-2", "dead-3", "dead-4"]
+
     def discard_all_dead(self, reason):
         self.calls.append(("discard_all_dead", reason))
         return 5
+
+    def discard_all_dead_ids(self, reason):
+        self.calls.append(("discard_all_dead_ids", reason))
+        return ["dead-1", "dead-2", "dead-3", "dead-4", "dead-5"]
+
+    def retry_all_active(self):
+        self.calls.append(("retry_all_active",))
+        return 2
+
+    def discard_all_active(self, reason):
+        self.calls.append(("discard_all_active", reason))
+        return 3
 
 
 def make_ui(tmp_path: Path, enabled=False):
@@ -86,6 +102,7 @@ def update(data, user_id=123):
     query = FakeQuery(data) if data else None
     return SimpleNamespace(
         effective_user=SimpleNamespace(id=user_id),
+        effective_chat=SimpleNamespace(type="private"),
         effective_message=message,
         callback_query=query,
     )
@@ -171,6 +188,28 @@ def test_batch_action_requires_confirmation(tmp_path):
 
     assert "确认" in event.callback_query.edits[0][0]
     assert "bridgeq:discard-all-confirm" in callback_values(event.callback_query.edits[0][1])
+
+
+def test_active_batch_action_requires_confirmation(tmp_path):
+    ui = make_ui(tmp_path, enabled=True)
+    event = update("bridgeq:retry-all-active")
+
+    ui.callback(event, None)
+
+    assert "确认" in event.callback_query.edits[0][0]
+    assert "bridgeq:retry-all-active-confirm" in callback_values(
+        event.callback_query.edits[0][1]
+    )
+
+
+def test_group_callback_is_rejected(tmp_path):
+    ui = make_ui(tmp_path, enabled=True)
+    event = update("bridgeq:home")
+    event.effective_chat.type = "group"
+
+    ui.callback(event, None)
+
+    assert event.callback_query.answers[0][0][0] == "无权执行"
 
 
 def test_non_admin_cannot_open_menu(tmp_path):
