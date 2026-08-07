@@ -21,3 +21,15 @@ def test_failed_delivery_store_prunes_expired_records(tmp_path):
     store.prune(now=20)
 
     assert FailedDeliveryStore(path).records == {}
+
+
+def test_failed_delivery_store_lists_live_records(tmp_path):
+    path = tmp_path / "failed-deliveries.json"
+    store = FailedDeliveryStore(path)
+    store.put("first", {"created_at": 2, "expires": 4102444800})
+    store.put("second", {"created_at": 1, "expires": 4102444800})
+
+    assert store.items() == [
+        ("first", {"created_at": 2, "expires": 4102444800}),
+        ("second", {"created_at": 1, "expires": 4102444800}),
+    ]

@@ -58,6 +58,14 @@ class FailedDeliveryStore:
             if self.records.pop(str(token), None) is not None:
                 self._save()
 
+    def items(self):
+        with self.lock:
+            self._prune_locked()
+            return [
+                (token, dict(record))
+                for token, record in self.records.items()
+            ]
+
     def _prune_locked(self, now: Optional[float] = None) -> None:
         now = now or time.time()
         expired = [

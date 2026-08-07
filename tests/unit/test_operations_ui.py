@@ -183,3 +183,35 @@ def test_status_markup_uses_two_rows_of_three_buttons():
     assert [button.text for button in markup.inline_keyboard[1]] == [
         "Bridge 队列", "刷新", "关闭",
     ]
+
+
+def test_delivery_markup_exposes_pending_and_failed_queues():
+    markup = OperationsUI.delivery_markup(1, 2)
+
+    assert [button.text for button in markup.inline_keyboard[0]] == [
+        "待处理 1 条", "失败 2 条",
+    ]
+    assert [button.callback_data for row in markup.inline_keyboard for button in row] == [
+        "ops:delivery:list:pending:0",
+        "ops:delivery:list:failed:0",
+        "ops:delivery",
+        "ops:close",
+    ]
+
+
+def test_failed_delivery_list_has_view_retry_and_delete_actions():
+    markup = OperationsUI.delivery_list_markup(
+        "failed",
+        [("failure-token", {"filename": "photo.jpg"})],
+        page=0,
+    )
+
+    callbacks = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+    ]
+
+    assert "ops:delivery:view:failed:failure-token" in callbacks
+    assert "ops:delivery:retry:failure-token" in callbacks
+    assert "ops:delivery:delete:failed:failure-token" in callbacks
