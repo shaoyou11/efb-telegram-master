@@ -7,6 +7,7 @@ from efb_telegram_master.operations_ui import (
     OperationsUI,
     _human_size,
     backup_summary,
+    delivery_summary,
     format_timestamp,
     format_uptime,
     load_json,
@@ -112,6 +113,27 @@ def test_status_falls_back_to_persistent_delivery_queues(tmp_path, monkeypatch):
 
     assert "待处理 1｜失败 1" in text
     assert "失败附件已持久化：1 条" in text
+
+
+def test_stale_reconcile_does_not_override_live_delivery_queues(tmp_path, monkeypatch):
+    state = tmp_path / "operations/state"
+    state.mkdir(parents=True)
+    pending_path = tmp_path / "profiles/comwechat/honus.comwechat"
+    pending_path.mkdir(parents=True)
+    (pending_path / "pending-files.json").write_text("{}", encoding="utf-8")
+    (state / "failed-deliveries.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr("efb_telegram_master.operations_ui.time.time", lambda: 20000)
+
+    result = delivery_summary(tmp_path, {
+        "checked_at": 1000,
+        "pending_count": 0,
+        "failed_count": 2,
+    })
+
+    assert result["pending"] == 0
+    assert result["failed"] == 0
+    assert result["reconcile_stale"] is True
 
 
 def test_backup_summary_reports_count_and_latest_without_file_content(tmp_path: Path):

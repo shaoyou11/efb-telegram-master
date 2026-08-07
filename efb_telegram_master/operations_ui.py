@@ -21,6 +21,7 @@ SENSITIVE_KEY = re.compile(r"(?i)^(token|password|passwd|secret|api_hash|api_id|
 BOT_TOKEN = re.compile(r"bot\d+:[^/\s]+")
 URL = re.compile(r"https?://[^\s]+")
 DELIVERY_PAGE_SIZE = 5
+RECONCILE_MAX_AGE_SECONDS = 3 * 60 * 60
 
 
 def redact_error(value: str) -> str:
@@ -106,26 +107,74 @@ def _record_count(value) -> int:
     return 0
 
 
+def _reconcile_is_fresh(reconcile: dict, now=None) -> bool:
+    checked_at = reconcile.get("checked_at")
+    if checked_at is None:
+        return True
+    try:
+        age = (time.time() if now is None else now) - float(checked_at)
+        max_age = int(os.getenv(
+            "EFB_RECONCILE_MAX_AGE_SECONDS",
+            RECONCILE_MAX_AGE_SECONDS,
+        ))
+    except (TypeError, ValueError):
+        return False
+    return 0 <= age <= max(0, max_age)
+
+
+def _record_is_active(record: dict, now=None) -> bool:
+    expires = record.get("expires")
+    if expires is None:
+        return True
+    try:
+        return float(expires) > (time.time() if now is None else now)
+    except (TypeError, ValueError):
+        return True
+
+
+def _active_record_count(records: dict, now=None) -> int:
+    now = time.time() if now is None else now
+    count = 0
+    for record in records.values():
+        if not isinstance(record, dict):
+            continue
+        if _record_is_active(record, now):
+            count += 1
+    return count
+
+
 def delivery_summary(data_root: Path, reconcile: dict) -> dict:
     state_root = data_root / "operations" / "state"
-    failed_records = load_json(state_root / "failed-deliveries.json")
-    pending_records = load_json(
+    failed_path = state_root / "failed-deliveries.json"
+    pending_path = (
         data_root / "profiles" / "comwechat" / "honus.comwechat" / "pending-files.json"
     )
+    failed_records = load_json(failed_path)
+    pending_records = load_json(pending_path)
+    reconcile_fresh = _reconcile_is_fresh(reconcile)
     try:
-        pending = max(0, int(reconcile.get("pending_count", 0)))
+        report_pending = max(0, int(reconcile.get("pending_count", 0)))
     except (TypeError, ValueError):
-        pending = 0
+        report_pending = 0
     try:
-        failed = max(0, int(reconcile.get("failed_count", 0)))
+        report_failed = max(0, int(reconcile.get("failed_count", 0)))
     except (TypeError, ValueError):
-        failed = 0
-    pending = max(pending, _record_count(pending_records))
-    failed = max(failed, _record_count(failed_records))
+        report_failed = 0
+    pending = _record_count(pending_records) if pending_path.is_file() else (
+        report_pending if reconcile_fresh else 0
+    )
+    failed = _active_record_count(failed_records) if failed_path.is_file() else (
+        report_failed if reconcile_fresh else 0
+    )
+    now = time.time()
     persisted = sum(
         1
         for record in failed_records.values()
         if isinstance(record, dict)
+        and (
+            record.get("expires") is None
+            or _record_is_active(record, now)
+        )
         and (
             record.get("storage") == "durable"
             or str(record.get("path", "")).find("failed-media") >= 0
@@ -135,6 +184,7 @@ def delivery_summary(data_root: Path, reconcile: dict) -> dict:
         "pending": pending,
         "failed": failed,
         "persisted_failed_media": persisted,
+        "reconcile_stale": not reconcile_fresh,
     }
 
 
@@ -693,6 +743,10 @@ class OperationsUI:
             recovery_window = "等待检查"
             recovery_config = "等待检查"
             diagnostic_retention = "等待检查"
+        reconcile_note = (
+            "投递对账：已过期，当前数字按实时队列\n"
+            if queue["reconcile_stale"] else ""
+        )
         return (
             "EFB 综合状态\n\n"
             f"EFB 运行时间：{format_uptime(self.started_at)}\n"
@@ -707,6 +761,7 @@ class OperationsUI:
             f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
             f"最近消息活动：{last_delivery}\n"
             f"投递队列：待处理 {queue['pending']}｜失败 {queue['failed']}\n"
+            f"{reconcile_note}"
             f"Bridge 队列：{bridge_summary}\n"
             f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
             f"映射数据库：{database_status}\n"
@@ -729,10 +784,15 @@ class OperationsUI:
         queue = delivery_summary(self.data_root, reconcile)
         pending_records = self._pending_records()
         failed_records = self._failed_records()
+        reconcile_note = (
+            "投递对账：已过期，当前数字按实时队列\n"
+            if queue["reconcile_stale"] else ""
+        )
         text = (
             "EFB 投递明细\n\n"
             f"待处理：{queue['pending']} 条\n"
             f"失败：{queue['failed']} 条\n"
+            f"{reconcile_note}"
             f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
             f"最近入站：{format_timestamp(delivery.get('last_inbound_at'))}\n"
             f"最近投递：{format_timestamp(delivery.get('last_delivered_at'))}\n"
