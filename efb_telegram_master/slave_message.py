@@ -3,6 +3,7 @@
 import html
 import itertools
 import logging
+import datetime
 import os
 import tempfile
 import threading
@@ -49,6 +50,10 @@ from .message import ETMMsg
 from .msg_type import get_msg_type
 from .utils import TelegramChatID, TelegramTopicID, TelegramMessageID, OldMsgID
 
+
+OFFLINE_LOGIN_NOTICE = "检测到微信未登录，请发送 /login 获取登录二维码，或发送 /wechat 打开微信管理"
+OFFLINE_LOGIN_NOTICE_ORIGIN = "honus.comwechat "
+
 if TYPE_CHECKING:
     from . import TelegramChannel
     from .bot_manager import TelegramBotManager
@@ -82,6 +87,29 @@ class SlaveMessageProcessor(LocaleMixin):
             "/data/operations/failed-media",
         ))
         self.failed_messages = {}
+
+    def cleanup_same_day_offline_notices(self, now=None) -> int:
+        now = now or datetime.datetime.now()
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        logs = self.db.get_msg_logs_by_text(
+            OFFLINE_LOGIN_NOTICE,
+            since=day_start,
+            origin_prefix=OFFLINE_LOGIN_NOTICE_ORIGIN,
+        )
+        deleted = 0
+        for log in logs:
+            try:
+                message_id = utils.message_id_str_to_id(log.master_msg_id)
+                self.bot.delete_message(*message_id)
+            except (TelegramError, TypeError, ValueError) as error:
+                self.logger.warning(
+                    "清理当天微信未登录提醒失败: %s",
+                    error,
+                )
+                continue
+            self.db.delete_msg_log(master_msg_id=log.master_msg_id)
+            deleted += 1
+        return deleted
 
     def delivery_policy(self, msg: Message) -> DeliveryPolicy:
         return self.channel.delivery_policy_store.get(utils.chat_id_to_str(chat=msg.chat))

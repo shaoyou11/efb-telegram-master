@@ -18,6 +18,9 @@ if TYPE_CHECKING:
     from . import TelegramChannel
 
 
+DELETE_MESSAGE_COMMAND = "__delete_message__"
+
+
 class ETMCommandMsgStorage:
     def __init__(self, commands: List[MessageCommand], module: Union[Channel, Middleware],
                  prefix: str, body: str):
@@ -117,6 +120,23 @@ class CommandsManager(LocaleMixin):
         prefix = command_storage.prefix
 
         self.logger.debug("[%s.%s] Command execution callback is valid. Command storage item: %s", chat_id, message_id, command_storage)
+
+        if command.callable_name == DELETE_MESSAGE_COMMAND:
+            try:
+                self.bot.delete_message(chat_id, message_id)
+            except Exception as error:
+                self.logger.warning("[%s.%s] 删除消息失败: %s", chat_id, message_id, error)
+                self.bot.answer_callback_query(
+                    prefix=prefix,
+                    text="删除失败，请稍后再试。",
+                    callback_query_id=update.callback_query.id,
+                    show_alert=True,
+                )
+                return None
+            self.channel.db.delete_msg_log(master_msg_id=f"{chat_id}.{message_id}")
+            self.msg_storage.pop(index, None)
+            self.bot.answer_callback_query(callback_query_id=update.callback_query.id)
+            return ConversationHandler.END
 
         # Clear inline buttons.
         update.callback_query.edit_message_reply_markup(None)

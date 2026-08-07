@@ -606,6 +606,19 @@ class DatabaseManager:
             return None
 
     @staticmethod
+    def get_msg_logs_by_text(
+        text: str,
+        since: Optional[datetime.datetime] = None,
+        origin_prefix: Optional[str] = None,
+    ) -> List[MsgLog]:
+        query = MsgLog.select().where(MsgLog.text == text)
+        if since is not None:
+            query = query.where(MsgLog.time >= since)
+        if origin_prefix:
+            query = query.where(MsgLog.slave_origin_uid.startswith(origin_prefix))
+        return list(query.order_by(MsgLog.time.asc()))
+
+    @staticmethod
     def delete_msg_log(master_msg_id: Optional[TgChatMsgIDStr] = None,
                        slave_msg_id: Optional[EFBChannelChatIDStr] = None,
                        slave_origin_uid: Optional[EFBChannelChatIDStr] = None):

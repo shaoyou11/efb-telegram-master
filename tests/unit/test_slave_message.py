@@ -103,6 +103,32 @@ def test_silent_delivery_overrides_normal_notification(channel, private, monkeyp
     assert captured["silent"] is True
 
 
+def test_cleanup_same_day_offline_notices_deletes_only_matching_logs():
+    deleted = []
+    removed = []
+
+    class FakeDatabase:
+        def get_msg_logs_by_text(self, text, since, origin_prefix):
+            assert text == "检测到微信未登录，请发送 /login 获取登录二维码，或发送 /wechat 打开微信管理"
+            assert origin_prefix == "honus.comwechat "
+            return [SimpleNamespace(master_msg_id="123.10"), SimpleNamespace(master_msg_id="123.11")]
+
+        def delete_msg_log(self, master_msg_id):
+            removed.append(master_msg_id)
+
+    processor = SlaveMessageProcessor.__new__(SlaveMessageProcessor)
+    processor.db = FakeDatabase()
+    processor.bot = SimpleNamespace(
+        delete_message=lambda chat_id, message_id: deleted.append((chat_id, message_id)),
+    )
+
+    count = processor.cleanup_same_day_offline_notices()
+
+    assert count == 2
+    assert deleted == [(123, 10), (123, 11)]
+    assert removed == ["123.10", "123.11"]
+
+
 def test_slave_message_generate_common_private(generate_message_template, private):
     message = build_dummy_message(private, private)
     header = generate_message_template(message, False)

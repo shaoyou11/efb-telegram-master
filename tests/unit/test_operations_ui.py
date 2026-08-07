@@ -203,8 +203,42 @@ def test_status_markup_uses_two_rows_of_three_buttons():
         "投递明细", "异常中心", "失败诊断",
     ]
     assert [button.text for button in markup.inline_keyboard[1]] == [
-        "Bridge 队列", "刷新", "关闭",
+        "Bridge 队列", "刷新", "关闭并删除",
     ]
+
+    assert markup.inline_keyboard[1][2].callback_data == "ops:status-close"
+
+
+def test_status_close_deletes_report_and_source_command():
+    deleted = []
+    answered = []
+    report = SimpleNamespace(
+        chat=SimpleNamespace(id=100),
+        message_id=20,
+        delete=lambda: deleted.append((100, 20)),
+    )
+    query = SimpleNamespace(
+        data="ops:status-close",
+        message=report,
+        answer=lambda: answered.append(True),
+    )
+    update = SimpleNamespace(
+        callback_query=query,
+        effective_user=SimpleNamespace(id=7),
+    )
+    ui = OperationsUI.__new__(OperationsUI)
+    ui.channel = SimpleNamespace(
+        config={"admins": [7]},
+        bot_manager=SimpleNamespace(
+            delete_message=lambda chat_id, message_id: deleted.append((chat_id, message_id)),
+        ),
+    )
+    ui._status_source_messages = {(100, 20): (100, 19)}
+
+    ui.callback(update, None)
+
+    assert deleted == [(100, 20), (100, 19)]
+    assert answered == [True]
 
 
 def test_delivery_markup_exposes_pending_and_failed_queues():

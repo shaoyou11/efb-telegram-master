@@ -258,6 +258,7 @@ class OperationsUI:
             channel,
             settings=getattr(channel, "bridge_queue_settings", None),
         )
+        self._status_source_messages = {}
 
     @staticmethod
     def markup(refresh: str = "", include_bridge: bool = False) -> InlineKeyboardMarkup:
@@ -271,7 +272,7 @@ class OperationsUI:
             row = [InlineKeyboardButton("Bridge 队列", callback_data="bridgeq:home")]
             if refresh:
                 row.append(InlineKeyboardButton("刷新", callback_data=f"ops:{refresh}"))
-            row.append(InlineKeyboardButton("关闭", callback_data="ops:close"))
+            row.append(InlineKeyboardButton("关闭并删除", callback_data="ops:status-close"))
             rows.append(row)
         else:
             row = []
@@ -284,12 +285,25 @@ class OperationsUI:
     def _allowed(self, update: Update) -> bool:
         return bool(update.effective_user and update.effective_user.id in self.channel.config["admins"])
 
-    def _send(self, update: Update, text: str, refresh: str = "", include_bridge: bool = False):
+    def _send(
+        self,
+        update: Update,
+        text: str,
+        refresh: str = "",
+        include_bridge: bool = False,
+        track_status_source: bool = False,
+    ):
         markup = self.markup(refresh, include_bridge=include_bridge)
         if update.callback_query:
-            update.callback_query.edit_message_text(text, reply_markup=markup)
+            result = update.callback_query.edit_message_text(text, reply_markup=markup)
         else:
-            update.effective_message.reply_text(text, reply_markup=markup)
+            result = update.effective_message.reply_text(text, reply_markup=markup)
+        if track_status_source and not update.callback_query and result:
+            source = update.effective_message
+            self._status_source_messages[(result.chat.id, result.message_id)] = (
+                source.chat.id,
+                source.message_id,
+            )
 
     @staticmethod
     def _delivery_key(kind: str, key: str) -> str:
@@ -773,7 +787,13 @@ class OperationsUI:
 
     def health(self, update: Update, _context: CallbackContext):
         if self._allowed(update):
-            self._send(update, self.health_text(), "status", include_bridge=True)
+            self._send(
+                update,
+                self.health_text(),
+                "status",
+                include_bridge=True,
+                track_status_source=True,
+            )
 
     def delivery_detail(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):
@@ -900,9 +920,25 @@ class OperationsUI:
             self.delivery_callback(update, context)
             return
         action = data.split(":", 1)[-1]
-        if action == "close":
+        if action in {"close", "status-close"}:
             query.answer()
-            query.message.delete()
+            source = self._status_source_messages.pop(
+                (query.message.chat.id, query.message.message_id),
+                None,
+            ) if action == "status-close" else None
+            try:
+                query.message.delete()
+            except Exception as error:
+                logger = getattr(self.channel, "logger", None)
+                if logger is not None:
+                    logger.warning("运维面板消息删除失败: %s", error)
+            if source:
+                try:
+                    self.channel.bot_manager.delete_message(*source)
+                except Exception as error:
+                    logger = getattr(self.channel, "logger", None)
+                    if logger is not None:
+                        logger.warning("状态命令消息删除失败: %s", error)
             return
         handlers = {
             "health": self.health,
