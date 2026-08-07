@@ -65,6 +65,13 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
             "night_enabled": False,
         }),
     )
+    ui.bridge_queue_ui = SimpleNamespace(client=SimpleNamespace(health=lambda: {
+        "staged_size": 0,
+        "pending_size": 0,
+        "inflight_size": 0,
+        "queue_size": 0,
+        "dead_letter_size": 1,
+    }))
     monkeypatch.setattr(ui, "_wechat_login", lambda: "已登录")
     monkeypatch.setattr(ui, "_bot_api", lambda: "正常")
     monkeypatch.setattr("efb_telegram_master.operations_ui.time.time", lambda: 4661)
@@ -78,6 +85,7 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     assert "EFB 运行时间：1小时 1分钟" in text
     assert "群成员姓名隐藏：开启" in text
     assert "自动恢复：总开关开启｜全天开启｜凌晨关闭" in text
+    assert "Bridge 队列：暂存 0｜待投递 0｜处理中 0｜总计 0｜死信 1" in text
 
 
 def test_status_falls_back_to_persistent_delivery_queues(tmp_path, monkeypatch):
@@ -164,3 +172,14 @@ def test_status_markup_keeps_previous_operations_entries():
     assert "ops:delivery" in callbacks
     assert "ops:errors" in callbacks
     assert "ops:diagnostic" in callbacks
+
+
+def test_status_markup_uses_two_rows_of_three_buttons():
+    markup = OperationsUI.markup("status", include_bridge=True)
+
+    assert [button.text for button in markup.inline_keyboard[0]] == [
+        "投递明细", "异常中心", "失败诊断",
+    ]
+    assert [button.text for button in markup.inline_keyboard[1]] == [
+        "Bridge 队列", "刷新", "关闭",
+    ]

@@ -191,12 +191,17 @@ class OperationsUI:
                 InlineKeyboardButton("异常中心", callback_data="ops:errors"),
                 InlineKeyboardButton("失败诊断", callback_data="ops:diagnostic"),
             ])
-            rows.append([InlineKeyboardButton("Bridge 队列", callback_data="bridgeq:home")])
-        row = []
-        if refresh:
-            row.append(InlineKeyboardButton("刷新", callback_data=f"ops:{refresh}"))
-        row.append(InlineKeyboardButton("关闭", callback_data="ops:close"))
-        rows.append(row)
+            row = [InlineKeyboardButton("Bridge 队列", callback_data="bridgeq:home")]
+            if refresh:
+                row.append(InlineKeyboardButton("刷新", callback_data=f"ops:{refresh}"))
+            row.append(InlineKeyboardButton("关闭", callback_data="ops:close"))
+            rows.append(row)
+        else:
+            row = []
+            if refresh:
+                row.append(InlineKeyboardButton("刷新", callback_data=f"ops:{refresh}"))
+            row.append(InlineKeyboardButton("关闭", callback_data="ops:close"))
+            rows.append(row)
         return InlineKeyboardMarkup(rows)
 
     def _allowed(self, update: Update) -> bool:
@@ -235,6 +240,22 @@ class OperationsUI:
         except Exception:
             return {}
 
+    def _bridge_queue_summary(self) -> str:
+        bridge_ui = getattr(self, "bridge_queue_ui", None)
+        client = getattr(bridge_ui, "client", None)
+        if client is None:
+            return "检测失败"
+        try:
+            snapshot = client.health()
+            staged = int(snapshot.get("staged_size", 0) or 0)
+            pending = int(snapshot.get("pending_size", 0) or 0)
+            inflight = int(snapshot.get("inflight_size", 0) or 0)
+            total = int(snapshot.get("queue_size", staged + pending + inflight) or 0)
+            dead = int(snapshot.get("dead_letter_size", 0) or 0)
+            return f"暂存 {staged}｜待投递 {pending}｜处理中 {inflight}｜总计 {total}｜死信 {dead}"
+        except Exception as error:
+            return f"不可用（{redact_error(error)}）"
+
     def health_text(self) -> str:
         backup = backup_summary(self.data_root / "backups")
         state_root = self.data_root / "operations" / "state"
@@ -256,6 +277,7 @@ class OperationsUI:
         free_percent = disk.get("free_percent")
         disk_text = f"{float(free_percent):.2f}%" if isinstance(free_percent, (int, float)) else "等待检查"
         queue = delivery_summary(self.data_root, reconcile)
+        bridge_summary = self._bridge_queue_summary()
         updates = upstream.get("update_count", 0)
         if watchdog:
             recovery_text = (
@@ -292,6 +314,7 @@ class OperationsUI:
             f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
             f"最近消息活动：{last_delivery}\n"
             f"投递队列：待处理 {queue['pending']}｜失败 {queue['failed']}\n"
+            f"Bridge 队列：{bridge_summary}\n"
             f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
             f"映射数据库：{database_status}\n"
             f"NAS 磁盘剩余：{disk_text}\n"
