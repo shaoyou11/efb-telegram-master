@@ -139,3 +139,14 @@ def test_security_scan_returns_key_names_without_values(tmp_path: Path):
 
     assert findings == [{"file": "config.yaml", "keys": ["token"]}]
     assert "very-secret" not in str(findings)
+
+
+def test_status_markup_exposes_bridge_queue_menu():
+    markup = OperationsUI.markup("status", include_bridge=True)
+
+    callbacks = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+    ]
+    assert "bridgeq:home" in callbacks

@@ -5,10 +5,14 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from urllib import request
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackContext, CallbackQueryHandler
+
+try:
+    from .bridge_queue import BridgeQueueClient, BridgeQueueError, BridgeQueueSettings
+except ImportError:  # pragma: no cover - keeps direct test loading compatible
+    from efb_telegram_master.bridge_queue import BridgeQueueClient, BridgeQueueError, BridgeQueueSettings
 
 
 LOGGER = logging.getLogger(__name__)
@@ -30,6 +34,7 @@ class BridgeDeadLetterGuard:
         self,
         channel,
         state_path: Path = Path("/data/operations/state/bridge-dead-alerts.json"),
+        settings_path: Path = None,
         autostart: bool = True,
     ):
         self.channel = channel
@@ -37,6 +42,12 @@ class BridgeDeadLetterGuard:
         self.base_url = os.getenv(
             "COMWECHAT_BRIDGE_API_BASE", "http://comwechat:19088"
         ).rstrip("/")
+        data_root = Path(os.getenv("EFB_DATA_ROOT", "/data"))
+        self.settings = BridgeQueueSettings(
+            settings_path
+            or data_root / "operations" / "state" / "bridge-queue-settings.json"
+        )
+        self.queue_client = BridgeQueueClient(self.base_url)
         self.notified = self._load()
         channel.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.callback, pattern=r"^bridge:")
@@ -72,17 +83,12 @@ class BridgeDeadLetterGuard:
         os.replace(temporary, self.state_path)
 
     def _json(self, path: str, payload=None) -> dict:
-        data = None
-        if payload is not None:
-            data = json.dumps(payload).encode("utf-8")
-        req = request.Request(
-            self.base_url + path,
-            data=data,
-            headers={"Content-Type": "application/json"},
-        )
-        with request.urlopen(req, timeout=5) as response:
-            result = json.loads(response.read().decode("utf-8"))
-        return result if isinstance(result, dict) else {}
+        return self.queue_client._request(path, payload)
+
+    def forget(self, message_id: str) -> None:
+        if str(message_id) in self.notified:
+            self.notified.discard(str(message_id))
+            self._save()
 
     @staticmethod
     def keyboard(message_id: str):
@@ -149,6 +155,6 @@ class BridgeDeadLetterGuard:
             self._save()
             query.answer("已重新加入投递队列")
             query.edit_message_text("EFB 附件已重新加入投递队列。")
-        except Exception:
+        except (BridgeQueueError, OSError, ValueError, TypeError):
             LOGGER.exception("failed to requeue Bridge dead letter")
             query.answer("重新投递失败，请稍后重试", show_alert=True)

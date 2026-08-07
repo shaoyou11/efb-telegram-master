@@ -20,6 +20,7 @@ from . import utils
 LOGGER = logging.getLogger(__name__)
 PRIVATE_COMMANDS = (
     ("status", "查看 EFB 综合运行状态。"),
+    ("bridge", "管理 Bridge 投递队列。"),
     ("watchdog", "管理微信自动恢复开关。"),
     ("wechat", "管理微信登录与自动恢复。"),
     ("filter", "设置微信会话接收策略。"),
@@ -68,6 +69,8 @@ COMMANDS = PRIVATE_COMMANDS + tuple(
 HELP_TEXT = """EFB Telegram 主端
 /status
     查看容器、消息、数据库、容量、备份和上游更新综合状态。
+/bridge
+    查看 Bridge 活动队列和死信，并管理重试、重新投递和放弃操作。
 /watchdog
     管理微信自动恢复的总开关、全天事件恢复和凌晨自主检测。
 /wechat

@@ -11,6 +11,8 @@ from urllib import request
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackContext
 
+from .bridge_queue_ui import BridgeQueueUI
+
 
 SENSITIVE_KEY = re.compile(r"(?i)^(token|password|passwd|secret|api_hash|api_id|vncpass)$")
 BOT_TOKEN = re.compile(r"bot\d+:[^/\s]+")
@@ -175,20 +177,25 @@ class OperationsUI:
         self.channel = channel
         self.data_root = Path(os.getenv("EFB_DATA_ROOT", "/data"))
         self.started_at = time.time()
+        self.bridge_queue_ui = BridgeQueueUI(channel)
 
     @staticmethod
-    def markup(refresh: str = "") -> InlineKeyboardMarkup:
+    def markup(refresh: str = "", include_bridge: bool = False) -> InlineKeyboardMarkup:
+        rows = []
+        if include_bridge:
+            rows.append([InlineKeyboardButton("Bridge 队列", callback_data="bridgeq:home")])
         row = []
         if refresh:
             row.append(InlineKeyboardButton("刷新", callback_data=f"ops:{refresh}"))
         row.append(InlineKeyboardButton("关闭", callback_data="ops:close"))
-        return InlineKeyboardMarkup([row])
+        rows.append(row)
+        return InlineKeyboardMarkup(rows)
 
     def _allowed(self, update: Update) -> bool:
         return bool(update.effective_user and update.effective_user.id in self.channel.config["admins"])
 
-    def _send(self, update: Update, text: str, refresh: str = ""):
-        markup = self.markup(refresh)
+    def _send(self, update: Update, text: str, refresh: str = "", include_bridge: bool = False):
+        markup = self.markup(refresh, include_bridge=include_bridge)
         if update.callback_query:
             update.callback_query.edit_message_text(text, reply_markup=markup)
         else:
@@ -287,10 +294,16 @@ class OperationsUI:
 
     def health(self, update: Update, _context: CallbackContext):
         if self._allowed(update):
-            self._send(update, self.health_text(), "status")
+            self._send(update, self.health_text(), "status", include_bridge=True)
 
     def status(self, update: Update, context: CallbackContext):
         self.health(update, context)
+
+    def bridge(self, update: Update, context: CallbackContext):
+        self.bridge_queue_ui.command(update, context)
+
+    def bridge_callback(self, update: Update, context: CallbackContext):
+        self.bridge_queue_ui.callback(update, context)
 
     def version(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):

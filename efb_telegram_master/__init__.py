@@ -172,6 +172,7 @@ class TelegramChannel(MasterChannel):
         for command, handler in (
                 ("status", self.operations_ui.status),
                 ("health", self.operations_ui.health),
+                ("bridge", self.operations_ui.bridge),
                 ("version", self.operations_ui.version),
                 ("backup_info", self.operations_ui.backup_info),
                 ("filetest", self.operations_ui.filetest),
@@ -180,6 +181,8 @@ class TelegramChannel(MasterChannel):
                 CommandHandler(command, handler, filters=non_edit_filter))
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.operations_ui.callback, pattern=r"^ops:"))
+        self.bot_manager.dispatcher.add_handler(
+            CallbackQueryHandler(self.operations_ui.bridge_callback, pattern=r"^bridgeq:"))
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.slave_messages.retry_callback, pattern=r"^retry:"))
         self.bot_manager.dispatcher.add_handler(
