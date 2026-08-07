@@ -283,6 +283,15 @@ class CommandsManager(LocaleMixin):
         result = functions[ExtraCommandName(groupdict['command'])](
             " ".join(update.message.text.split(' ', 1)[1:]))
 
+        wechat_control = getattr(self.channel, "wechat_control", None)
+        if (
+            str(channel.channel_id) == "honus.comwechat"
+            and groupdict["command"] == "reauth"
+            and result == "请扫描二维码登录"
+            and wechat_control is not None
+        ):
+            wechat_control.track_login_prompt(msg)
+
         self.bot.edit_message_text(prefix=header, text=result,
                                    chat_id=update.message.chat.id, message_id=msg.message_id,
                                    parse_mode=parse_mode)

@@ -3,7 +3,7 @@ import hashlib
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from importlib import metadata
 from pathlib import Path
 from typing import Dict, List
@@ -22,6 +22,7 @@ BOT_TOKEN = re.compile(r"bot\d+:[^/\s]+")
 URL = re.compile(r"https?://[^\s]+")
 DELIVERY_PAGE_SIZE = 5
 RECONCILE_MAX_AGE_SECONDS = 3 * 60 * 60
+SHANGHAI_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 
 
 def redact_error(value: str) -> str:
@@ -207,6 +208,19 @@ def format_timestamp(value) -> str:
         if timestamp <= 0:
             return "暂无"
         return datetime.fromtimestamp(timestamp).strftime("%m-%d %H:%M")
+    except (TypeError, ValueError, OSError):
+        return "暂无"
+
+
+def format_session_timestamp(value) -> str:
+    try:
+        timestamp = float(value)
+        if timestamp <= 0:
+            return "暂无"
+        return datetime.fromtimestamp(
+            timestamp,
+            SHANGHAI_TIMEZONE,
+        ).strftime("%Y-%m-%d %H:%M:%S")
     except (TypeError, ValueError, OSError):
         return "暂无"
 
@@ -722,6 +736,13 @@ class OperationsUI:
         database = load_json(self.data_root / "database-audit-latest.json")
         capacity = load_json(self.data_root / "capacity-audit-latest.json")
         upstream = load_json(self.data_root / "upstream-audit-latest.json")
+        session_events = load_json(
+            self.data_root
+            / "profiles"
+            / "comwechat"
+            / "honus.comwechat"
+            / "session-events.json"
+        )
         watchdog = self._watchdog_state()
         spoiler_store = getattr(self.channel, "author_name_spoiler_store", None)
         spoiler_enabled = bool(getattr(spoiler_store, "enabled", False))
@@ -765,6 +786,8 @@ class OperationsUI:
             "EFB 综合状态\n\n"
             f"EFB 运行时间：{format_uptime(self.started_at)}\n"
             f"微信：{self._wechat_login()}\n"
+            f"最近退出时间：{format_session_timestamp(session_events.get('last_logout_at'))}\n"
+            f"最近登录时间：{format_session_timestamp(session_events.get('last_login_at'))}\n"
             f"Telegram Bot API：{self._bot_api()}\n"
             f"四容器与共享网络：{stack_status}\n"
             f"最近恢复动作：{health.get('action', '暂无')}\n"

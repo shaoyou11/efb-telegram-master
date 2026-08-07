@@ -9,6 +9,7 @@ from telegram.ext import CallbackContext, CallbackQueryHandler, CommandHandler
 LOGGER = logging.getLogger(__name__)
 COMWECHAT_CHANNEL_ID = "honus.comwechat"
 PANEL_TEXT = "微信管理\n\n请选择需要执行的操作。"
+LOGIN_PROMPT_TEXT = "请扫描二维码登录"
 
 
 def find_comwechat_channel(slaves):
@@ -37,6 +38,7 @@ def confirmation_keyboard():
 class WeChatControl:
     def __init__(self, channel):
         self.channel = channel
+        self._login_prompt_messages = set()
         dispatcher = channel.bot_manager.dispatcher
         dispatcher.add_handler(CommandHandler("login", self.login))
         dispatcher.add_handler(CommandHandler("wechat", self.show))
@@ -67,10 +69,37 @@ class WeChatControl:
         status = message.reply_text(pending_text)
         try:
             result = self.call_extra(command)
+            if command == "reauth" and result == LOGIN_PROMPT_TEXT:
+                self.track_login_prompt(status)
+            else:
+                self.forget_login_prompt(status)
             status.edit_text(result or "操作已完成。")
         except Exception:
             LOGGER.exception("failed to execute ComWechat command: %s", command)
+            self.forget_login_prompt(status)
             status.edit_text("微信服务暂时无法完成此操作，请稍后再试。")
+
+    def track_login_prompt(self, message):
+        self._login_prompt_messages.add((message.chat_id, message.message_id))
+
+    def forget_login_prompt(self, message):
+        self._login_prompt_messages.discard((message.chat_id, message.message_id))
+
+    def cleanup_login_prompts(self):
+        """Delete tracked QR instructions after ComWechat reports login success."""
+        prompts = list(self._login_prompt_messages)
+        for chat_id, message_id in prompts:
+            try:
+                self.channel.bot_manager.delete_message(chat_id, message_id)
+            except Exception:
+                LOGGER.exception(
+                    "failed to delete stale WeChat login prompt: %s/%s",
+                    chat_id,
+                    message_id,
+                )
+            finally:
+                self._login_prompt_messages.discard((chat_id, message_id))
+        return len(prompts)
 
     def login(self, update: Update, context: CallbackContext):
         if not self.is_admin(update):

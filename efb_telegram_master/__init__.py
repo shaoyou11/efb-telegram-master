@@ -669,6 +669,9 @@ class TelegramChannel(MasterChannel):
     def cleanup_same_day_offline_notices(self):
         return self.slave_messages.cleanup_same_day_offline_notices()
 
+    def cleanup_login_prompts(self):
+        return self.wechat_control.cleanup_login_prompts()
+
     def get_message_by_id(self, chat: Chat,
                           msg_id: MessageID) -> Optional[EFBMessage]:
         origin_uid = etm_utils.chat_id_to_str(chat=chat)

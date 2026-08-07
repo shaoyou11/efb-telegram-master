@@ -67,3 +67,38 @@ def test_extra_command_redirects_to_wechat_panel():
     source = inspect.getsource(CommandsManager.extra_listing)
 
     assert "wechat_control.show" in source
+
+
+def test_login_prompt_is_tracked_and_deleted_after_successful_login():
+    deleted = []
+
+    class FakeStatus:
+        chat_id = 123
+        message_id = 456
+
+        def edit_text(self, text):
+            self.text = text
+
+    class FakeMessage:
+        def reply_text(self, text):
+            status = FakeStatus()
+            status.text = text
+            return status
+
+    control = WeChatControl.__new__(WeChatControl)
+    control.channel = SimpleNamespace(
+        bot_manager=SimpleNamespace(
+            delete_message=lambda chat_id, message_id: deleted.append(
+                (chat_id, message_id)
+            )
+        )
+    )
+    control._login_prompt_messages = set()
+
+    with patch.object(WeChatControl, "call_extra", return_value="请扫描二维码登录"):
+        control.run_action(FakeMessage(), "reauth", "正在获取二维码")
+
+    assert control._login_prompt_messages == {(123, 456)}
+    assert control.cleanup_login_prompts() == 1
+    assert deleted == [(123, 456)]
+    assert control._login_prompt_messages == set()

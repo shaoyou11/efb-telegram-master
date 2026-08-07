@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -54,6 +55,13 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     (tmp_path / "upstream-audit-latest.json").write_text(json.dumps({
         "update_count": 3,
     }), encoding="utf-8")
+    session_path = tmp_path / "profiles/comwechat/honus.comwechat"
+    session_path.mkdir(parents=True)
+    shanghai = timezone(timedelta(hours=8), "Asia/Shanghai")
+    (session_path / "session-events.json").write_text(json.dumps({
+        "last_logout_at": datetime(2026, 8, 8, 3, 12, 0, tzinfo=shanghai).timestamp(),
+        "last_login_at": datetime(2026, 8, 8, 3, 30, 0, tzinfo=shanghai).timestamp(),
+    }), encoding="utf-8")
 
     ui = OperationsUI.__new__(OperationsUI)
     ui.data_root = Path(tmp_path)
@@ -85,6 +93,8 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     assert "待评估上游更新：3 项" in text
     assert "EFB 运行时间：1小时 1分钟" in text
     assert "群成员姓名隐藏：开启" in text
+    assert "最近退出时间：2026-08-08 03:12:00" in text
+    assert "最近登录时间：2026-08-08 03:30:00" in text
     assert "自动恢复：总开关开启｜全天开启｜凌晨关闭" in text
     assert "Bridge 队列：暂存 0｜待投递 0｜处理中 0｜总计 0｜死信 1" in text
 
