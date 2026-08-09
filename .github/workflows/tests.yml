@@ -32,6 +32,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install '.[tests,tgs]'
         pip install 'git+https://github.com/shaoyou11/ehforwarderbot-core.git@abf737397cdea2dde991b0cb547877157a031cf7'
+        pip install 'urllib3==1.26.15'
     # Keep runtime tests blocking while legacy annotations are migrated for current mypy.
     - name: Check type annotations
       continue-on-error: true
