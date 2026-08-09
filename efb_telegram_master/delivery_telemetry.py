@@ -45,6 +45,7 @@ class DeliveryTelemetry:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
+                data.setdefault("last_latency_ms", None)
                 return data
         except (OSError, ValueError, TypeError):
             pass
