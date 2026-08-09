@@ -28,6 +28,15 @@ def test_delivery_telemetry_records_recent_latency(tmp_path, monkeypatch):
     assert state["last_latency_ms"] == 1250
 
 
+def test_legacy_delivery_state_gets_latency_field(tmp_path):
+    path = tmp_path / "delivery.json"
+    path.write_text(json.dumps({"pending": None}), encoding="utf-8")
+
+    telemetry = DeliveryTelemetry(path)
+
+    assert telemetry.state["last_latency_ms"] is None
+
+
 def test_failure_reason_is_redacted():
     result = sanitize_failure("https://host/bot123:secret/send failed at /private/file.jpg")
     assert "secret" not in result

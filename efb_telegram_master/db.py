@@ -214,6 +214,12 @@ class DatabaseManager:
         Initializing tables.
         """
         database.create_tables([ChatAssoc, MsgLog, SlaveChatInfo, TopicAssoc])
+        DatabaseManager._wait_for_write_queue()
+
+    @staticmethod
+    def _wait_for_write_queue():
+        """Wait until queued schema writes are visible to subsequent reads."""
+        database.execute_sql("PRAGMA user_version").fetchall()
 
     @staticmethod
     def _migrate(i: int):
@@ -253,6 +259,7 @@ class DatabaseManager:
             migrate(
                 migrator.add_column("msglog", "file_unique_id", MsgLog.file_unique_id)
             )
+        DatabaseManager._wait_for_write_queue()
 
     def add_chat_assoc(self, master_uid: EFBChannelChatIDStr,
                        slave_uid: EFBChannelChatIDStr,
