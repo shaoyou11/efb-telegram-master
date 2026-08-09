@@ -37,9 +37,11 @@ jobs:
       run: |
         python - <<'PY'
         from pathlib import Path
-        import apscheduler
+        import sysconfig
 
-        root = Path(apscheduler.__file__).parent
+        root = Path(sysconfig.get_paths()['purelib']) / 'apscheduler'
+        if not root.is_dir():
+            raise SystemExit('APScheduler package path not found')
         init_path = root / '__init__.py'
         init_text = init_path.read_text()
         init_text = init_text.replace(
