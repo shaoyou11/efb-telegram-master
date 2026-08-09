@@ -212,6 +212,13 @@ def format_timestamp(value) -> str:
         return "暂无"
 
 
+def format_audit_status(report: dict) -> str:
+    if not report:
+        return "未检查"
+    status = "正常" if report.get("healthy", True) else "异常"
+    return f"{status}（检查时间{format_timestamp(report.get('checked_at'))}）"
+
+
 def format_session_timestamp(value) -> str:
     try:
         timestamp = float(value)
@@ -800,6 +807,8 @@ class OperationsUI:
             f"投递队列：待处理 {queue['pending']}｜失败 {queue['failed']}\n"
             f"{reconcile_note}"
             f"Bridge 队列：{bridge_summary}\n"
+            f"审计：投递 {format_audit_status(reconcile)}｜数据库 {format_audit_status(database)}\n"
+            f"容量 {format_audit_status(capacity)}｜上游 {format_audit_status(upstream)}\n"
             f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
             f"映射数据库：{database_status}\n"
             f"NAS 磁盘剩余：{disk_text}\n"

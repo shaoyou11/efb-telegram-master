@@ -9,6 +9,7 @@ from efb_telegram_master.operations_ui import (
     _human_size,
     backup_summary,
     delivery_summary,
+    format_audit_status,
     format_timestamp,
     format_uptime,
     load_json,
@@ -31,6 +32,11 @@ def test_format_uptime_formats_process_runtime():
     assert format_uptime(1000, now=4661) == "1小时 1分钟"
 
 
+def test_format_audit_status_reports_health_and_missing_check_time():
+    assert format_audit_status({"healthy": True}) == "正常（检查时间暂无）"
+    assert format_audit_status({"healthy": False}) == "异常（检查时间暂无）"
+
+
 def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     state = tmp_path / "operations/state"
     state.mkdir(parents=True)
@@ -45,15 +51,22 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     (tmp_path / "delivery-reconcile-latest.json").write_text(json.dumps({
         "pending_count": 1,
         "failed_count": 2,
+        "healthy": True,
+        "checked_at": 1000,
     }), encoding="utf-8")
     (tmp_path / "database-audit-latest.json").write_text(json.dumps({
         "healthy": True,
+        "checked_at": 1000,
     }), encoding="utf-8")
     (tmp_path / "capacity-audit-latest.json").write_text(json.dumps({
         "disk": {"free_percent": 75.5},
+        "healthy": True,
+        "checked_at": 1000,
     }), encoding="utf-8")
     (tmp_path / "upstream-audit-latest.json").write_text(json.dumps({
         "update_count": 3,
+        "healthy": True,
+        "checked_at": 1000,
     }), encoding="utf-8")
     session_path = tmp_path / "profiles/comwechat/honus.comwechat"
     session_path.mkdir(parents=True)
@@ -97,6 +110,9 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     assert "最近登录时间：2026-08-08 03:30:00" in text
     assert "自动恢复：总开关开启｜全天开启｜凌晨关闭" in text
     assert "Bridge 队列：暂存 0｜待投递 0｜处理中 0｜总计 0｜死信 1" in text
+    assert "审计：投递 正常" in text
+    assert "数据库 正常" in text
+    assert "上游 正常" in text
 
 
 def test_status_falls_back_to_persistent_delivery_queues(tmp_path, monkeypatch):
