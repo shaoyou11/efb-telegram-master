@@ -1,9 +1,13 @@
+import os
+from unittest.mock import patch
+
 import pytest
 from pathlib import Path
 
 from ruamel.yaml import YAML
 from typing import List
 
+from telegram import User
 from telegram.error import TimedOut, NetworkError
 
 import ehforwarderbot.utils
@@ -102,13 +106,26 @@ def coordinator(tmp_path_factory, monkey_class, bot_token, bot_admins) -> ehforw
         'admins': bot_admins
     })
 
-    ehforwarderbot.coordinator.add_channel(TelegramChannel())
-
-    yield ehforwarderbot.coordinator
-
-    ehforwarderbot.coordinator.master.stop_polling()
-    for i in ehforwarderbot.coordinator.slaves.values():
-        i.stop_polling()
+    offline_patch = patch(
+        "telegram.Bot.get_me",
+        return_value=User(
+            id=1,
+            first_name="CI",
+            is_bot=True,
+            username="ci_placeholder_bot",
+        ),
+    ) if os.getenv("EFB_TEST_OFFLINE") == "1" else None
+    if offline_patch:
+        offline_patch.start()
+    try:
+        ehforwarderbot.coordinator.add_channel(TelegramChannel())
+        yield ehforwarderbot.coordinator
+    finally:
+        if offline_patch:
+            offline_patch.stop()
+        ehforwarderbot.coordinator.master.stop_polling()
+        for i in ehforwarderbot.coordinator.slaves.values():
+            i.stop_polling()
 
 
 @pytest.fixture(scope="module")
