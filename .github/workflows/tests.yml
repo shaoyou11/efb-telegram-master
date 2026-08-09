@@ -33,6 +33,39 @@ jobs:
         pip install '.[tests,tgs]'
         pip install 'git+https://github.com/shaoyou11/ehforwarderbot-core.git@abf737397cdea2dde991b0cb547877157a031cf7'
         pip install 'urllib3==1.26.15'
+    - name: Align runtime compatibility patches
+      run: |
+        python - <<'PY'
+        from pathlib import Path
+        import apscheduler
+
+        root = Path(apscheduler.__file__).parent
+        init_path = root / '__init__.py'
+        init_text = init_path.read_text()
+        init_text = init_text.replace(
+            'from pkg_resources import get_distribution, DistributionNotFound',
+            'from importlib.metadata import distribution, PackageNotFoundError',
+        )
+        init_text = init_text.replace('get_distribution(', 'distribution(')
+        init_text = init_text.replace(
+            'except DistributionNotFound:', 'except PackageNotFoundError:'
+        )
+        init_text = init_text.replace(
+            'del get_distribution, DistributionNotFound',
+            'del distribution, PackageNotFoundError',
+        )
+        init_path.write_text(init_text)
+
+        base_path = root / 'schedulers' / 'base.py'
+        base_text = base_path.read_text()
+        base_text = base_text.replace(
+            'from pkg_resources import iter_entry_points',
+            'from importlib.metadata import entry_points\n\n'
+            'def iter_entry_points(group):\n'
+            '    return entry_points().select(group=group)',
+        )
+        base_path.write_text(base_text)
+        PY
     # Keep runtime tests blocking while legacy annotations are migrated for current mypy.
     - name: Check type annotations
       continue-on-error: true
