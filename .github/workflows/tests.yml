@@ -1,6 +1,7 @@
 name: Tests
 
 on:
+  workflow_dispatch:
   push:
     paths:
       - 'efb_telegram_master/**.py'
