@@ -46,7 +46,7 @@ def offline_bot_post(*args, **kwargs):
     except (TypeError, ValueError):
         pass
     message = {
-        "message_id": next(offline_bot_post.message_ids),
+        "message_id": data.get("message_id") or next(offline_bot_post.message_ids),
         "date": int(time.time()),
         "chat": {"id": chat_id, "type": "private"},
     }
@@ -55,10 +55,16 @@ def offline_bot_post(*args, **kwargs):
     if "caption" in data:
         message["caption"] = data["caption"]
     if endpoint in {"sendPhoto", "editMessageMedia"}:
-        message["photo"] = [{"file_id": "ci-photo", "width": 1, "height": 1}]
+        message["photo"] = [{
+            "file_id": "ci-photo",
+            "file_unique_id": "ci-photo-unique",
+            "width": 1,
+            "height": 1,
+        }]
     if endpoint in {"sendDocument", "editMessageMedia"}:
         message["document"] = {
             "file_id": "ci-document",
+            "file_unique_id": "ci-document-unique",
             "file_name": data.get("filename", "ci.txt"),
             "mime_type": "text/plain",
             "file_size": 0,
@@ -135,6 +141,9 @@ def monkey_class():
 def coordinator(tmp_path_factory, monkey_class, bot_token, bot_admins) -> ehforwarderbot.coordinator:
     """Loaded coordinator with ETM and mock modules"""
     tmp_path = tmp_path_factory.mktemp("etm_test")
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    monkey_class.setenv("EFB_DATA_ROOT", str(data_root))
     monkey_class.setenv("EFB_DATA_PATH", str(tmp_path))
 
     # Framework configs
