@@ -1,4 +1,6 @@
 import os
+import itertools
+import time
 from unittest.mock import patch
 
 import pytest
@@ -7,7 +9,6 @@ from pathlib import Path
 from ruamel.yaml import YAML
 from typing import List
 
-from telegram import User
 from telegram.error import TimedOut, NetworkError
 
 import ehforwarderbot.utils
@@ -18,6 +19,54 @@ from .bot import get_bot
 from efb_telegram_master import TelegramChannel
 
 pytestmark = [pytest.mark.xfail(raises=TimedOut), pytest.mark.xfail(raises=NetworkError)]
+
+
+def offline_bot_post(*args, **kwargs):
+    """Return Telegram-shaped responses without contacting the Bot API."""
+    if args and not isinstance(args[0], str):
+        args = args[1:]
+    endpoint = args[0] if args else kwargs.get("endpoint", "")
+    data = args[1] if len(args) > 1 else kwargs.get("data")
+    data = data or {}
+    if endpoint == "getMe":
+        return {
+            "id": 1,
+            "is_bot": True,
+            "first_name": "CI",
+            "username": "ci_placeholder_bot",
+        }
+    if endpoint == "setMyCommands":
+        return True
+    if endpoint.startswith("get") or endpoint.startswith("delete"):
+        return True
+
+    chat_id = data.get("chat_id", 1)
+    try:
+        chat_id = int(chat_id)
+    except (TypeError, ValueError):
+        pass
+    message = {
+        "message_id": next(offline_bot_post.message_ids),
+        "date": int(time.time()),
+        "chat": {"id": chat_id, "type": "private"},
+    }
+    if "text" in data:
+        message["text"] = data["text"]
+    if "caption" in data:
+        message["caption"] = data["caption"]
+    if endpoint in {"sendPhoto", "editMessageMedia"}:
+        message["photo"] = [{"file_id": "ci-photo", "width": 1, "height": 1}]
+    if endpoint in {"sendDocument", "editMessageMedia"}:
+        message["document"] = {
+            "file_id": "ci-document",
+            "file_name": data.get("filename", "ci.txt"),
+            "mime_type": "text/plain",
+            "file_size": 0,
+        }
+    return message
+
+
+offline_bot_post.message_ids = itertools.count(1)
 
 
 @pytest.fixture(scope='session')
@@ -107,13 +156,8 @@ def coordinator(tmp_path_factory, monkey_class, bot_token, bot_admins) -> ehforw
     })
 
     offline_patch = patch(
-        "telegram.Bot.get_me",
-        return_value=User(
-            id=1,
-            first_name="CI",
-            is_bot=True,
-            username="ci_placeholder_bot",
-        ),
+        "telegram.Bot._post",
+        side_effect=offline_bot_post,
     ) if os.getenv("EFB_TEST_OFFLINE") == "1" else None
     if offline_patch:
         offline_patch.start()
