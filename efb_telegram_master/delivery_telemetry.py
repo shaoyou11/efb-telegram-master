@@ -48,8 +48,14 @@ class DeliveryTelemetry:
                 return data
         except (OSError, ValueError, TypeError):
             pass
-        return {"pending": None, "last_inbound_at": None, "last_delivered_at": None,
-                "last_filtered_at": None, "last_failure": None}
+        return {
+            "pending": None,
+            "last_inbound_at": None,
+            "last_delivered_at": None,
+            "last_filtered_at": None,
+            "last_failure": None,
+            "last_latency_ms": None,
+        }
 
     def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,27 +76,42 @@ class DeliveryTelemetry:
                                      "size": int(size), "at": now}
             self._save()
 
+    def _finish(self, uid: str, now: float) -> None:
+        pending = self.state.get("pending") or {}
+        if str(pending.get("uid") or "") != str(uid):
+            return
+        try:
+            latency_ms = max(0.0, (now - float(pending["at"])) * 1000)
+        except (KeyError, TypeError, ValueError):
+            latency_ms = None
+        if latency_ms is not None:
+            self.state["last_latency_ms"] = round(latency_ms)
+        self.state["pending"] = None
+
     def delivered(self, uid: str):
         with self.lock:
-            self.state["last_delivered_at"] = time.time()
-            if (self.state.get("pending") or {}).get("uid") == str(uid):
-                self.state["pending"] = None
+            now = time.time()
+            self.state["last_delivered_at"] = now
+            self._finish(uid, now)
             self.state["last_failure"] = None
             self._save()
 
     def filtered(self, uid: str):
         with self.lock:
-            self.state["last_filtered_at"] = time.time()
-            if (self.state.get("pending") or {}).get("uid") == str(uid):
-                self.state["pending"] = None
+            now = time.time()
+            self.state["last_filtered_at"] = now
+            self._finish(uid, now)
             self._save()
 
     def failed(self, uid: str, reason: str):
         with self.lock:
-            self.state["last_failure"] = {"uid": str(uid), "reason": sanitize_failure(reason),
-                                          "at": time.time()}
-            if (self.state.get("pending") or {}).get("uid") == str(uid):
-                self.state["pending"] = None
+            now = time.time()
+            self.state["last_failure"] = {
+                "uid": str(uid),
+                "reason": sanitize_failure(reason),
+                "at": now,
+            }
+            self._finish(uid, now)
             self._save()
 
 

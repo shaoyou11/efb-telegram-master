@@ -15,6 +15,19 @@ def test_delivery_telemetry_records_and_clears_pending(tmp_path):
     assert state["last_delivered_at"] > 0
 
 
+def test_delivery_telemetry_records_recent_latency(tmp_path, monkeypatch):
+    path = tmp_path / "delivery.json"
+    telemetry = DeliveryTelemetry(path)
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 100.0)
+    telemetry.inbound("message-1", "Image", 100)
+
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 101.25)
+    telemetry.delivered("message-1")
+
+    state = json.loads(path.read_text())
+    assert state["last_latency_ms"] == 1250
+
+
 def test_failure_reason_is_redacted():
     result = sanitize_failure("https://host/bot123:secret/send failed at /private/file.jpg")
     assert "secret" not in result
