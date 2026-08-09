@@ -282,6 +282,10 @@ class MockSlaveChannel(SlaveChannel):
         if self.__picture_dict.get(chat.uid):
             return open(f'tests/mocks/{self.__picture_dict[chat.uid]}', 'rb')
 
+    def get_chat_member_picture(self, chat_member: ChatMember) -> Optional[BinaryIO]:
+        if self.__picture_dict.get(chat_member.uid):
+            return open(f'tests/mocks/{self.__picture_dict[chat_member.uid]}', 'rb')
+
     # endregion [Necessities]
 
     def get_chats_by_criteria(self,
