@@ -316,7 +316,9 @@ def test_manual_restart_request_is_atomic_and_idempotent(tmp_path):
 
 def test_manual_restart_status_text_does_not_expose_request_details():
     assert format_manual_restart({"status": "running"}) == "执行中"
-    assert format_manual_restart({"status": "completed", "completed_at": 1000}) == "最近完成 01-01 08:16"
+    assert format_manual_restart({"status": "completed", "completed_at": 1000}) == (
+        f"最近完成 {format_timestamp(1000)}"
+    )
 
 
 def test_status_close_deletes_report_and_source_command():
