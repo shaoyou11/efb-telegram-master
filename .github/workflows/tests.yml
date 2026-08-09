@@ -83,12 +83,14 @@ jobs:
         mypy -p efb_telegram_master --ignore-missing-imports
     - name: Test with pytest (unit tests only)
       env:
-        TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-        ADMINS: ${{ secrets.TELEGRAM_ADMINS }}
-        GROUPS: ${{ secrets.TELEGRAM_GROUPS }}
-        CHANNELS: ${{ secrets.TELEGRAM_CHANNELS }}
-        USER_SESSION: ${{ secrets.TELEGRAM_USER_SESSION }}
-        API_ID: ${{ secrets.TELEGRAM_API_ID }}
-        API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        # Unit tests need valid-shaped configuration to build local objects;
+        # integration tests remain skipped unless explicitly run with secrets.
+        TOKEN: 000000000:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+        ADMINS: 1
+        GROUPS: 1
+        CHANNELS: 1
+        USER_SESSION: ci-placeholder
+        API_ID: 1
+        API_HASH: 0000000000000000000000000000000000
       run: |
         pytest -vv -r a -l --color=yes
