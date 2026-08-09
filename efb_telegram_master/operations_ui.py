@@ -102,6 +102,15 @@ def load_json(path: Path) -> dict:
         return {}
 
 
+def image_metadata(data_root: Path) -> dict:
+    metadata = load_json(data_root / "operations" / "state" / "image-metadata.json")
+    if not metadata.get("build_time"):
+        metadata["build_time"] = os.getenv("EFB_IMAGE_BUILD_TIME")
+    if not metadata.get("revision"):
+        metadata["revision"] = os.getenv("EFB_IMAGE_SOURCE_REF")
+    return metadata
+
+
 def _record_count(value) -> int:
     if isinstance(value, (dict, list)):
         return len(value)
@@ -212,6 +221,13 @@ def format_timestamp(value) -> str:
         return "暂无"
 
 
+def format_audit_status(report: dict) -> str:
+    if not report:
+        return "未检查"
+    status = "正常" if report.get("healthy", True) else "异常"
+    return f"{status}（检查时间{format_timestamp(report.get('checked_at'))}）"
+
+
 def format_session_timestamp(value) -> str:
     try:
         timestamp = float(value)
@@ -241,6 +257,68 @@ def format_uptime(started_at, now=None) -> str:
     if minutes or not parts:
         parts.append(f"{minutes}分钟")
     return " ".join(parts)
+
+
+def format_image_build_time(value) -> str:
+    if value in (None, ""):
+        return "未知"
+    try:
+        return format_session_timestamp(float(value))
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    try:
+        iso_text = text[:-1] + "+00:00" if text.endswith("Z") else text
+        parsed = datetime.fromisoformat(iso_text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(SHANGHAI_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    except (AttributeError, TypeError, ValueError):
+        return _clean_text(text, 40)
+
+
+def format_queue_latency(delivery: dict, now=None) -> str:
+    pending = delivery.get("pending") if isinstance(delivery, dict) else None
+    if isinstance(pending, dict) and pending.get("at") is not None:
+        try:
+            elapsed_ms = max(
+                0.0,
+                ((time.time() if now is None else now) - float(pending["at"])) * 1000,
+            )
+            if elapsed_ms < 1000:
+                return f"当前等待 {elapsed_ms:.0f} 毫秒"
+            return f"当前等待 {elapsed_ms / 1000:.2f} 秒"
+        except (TypeError, ValueError):
+            pass
+    try:
+        latency_ms = max(0.0, float(delivery.get("last_latency_ms")))
+    except (AttributeError, TypeError, ValueError):
+        return "暂无"
+    if latency_ms < 1000:
+        return f"最近完成 {latency_ms:.0f} 毫秒"
+    return f"最近完成 {latency_ms / 1000:.2f} 秒"
+
+
+def format_latest_match(metadata: dict) -> str:
+    value = metadata.get("latest_match") if isinstance(metadata, dict) else None
+    if isinstance(value, bool):
+        status = "匹配" if value else "不匹配"
+    elif str(value).lower() in {"true", "yes", "1", "match", "matched"}:
+        status = "匹配"
+    elif str(value).lower() in {"false", "no", "0", "mismatch", "unmatched"}:
+        status = "不匹配"
+    else:
+        status = "未校验"
+    checked = format_timestamp(metadata.get("checked_at")) if isinstance(metadata, dict) else "暂无"
+    return f"{status}（最近校验{checked}）"
+
+
+def runtime_version_text() -> str:
+    return (
+        f"EFB {_package_version('ehforwarderbot')}｜"
+        f"Telegram Master {_package_version('efb-telegram-master')}｜"
+        f"ComWechat {_package_version('efb-wechat-comwechat-slave')}"
+    )
 
 
 def _clean_text(value, limit: int = 80) -> str:
@@ -731,6 +809,7 @@ class OperationsUI:
         backup = backup_summary(self.data_root / "backups")
         state_root = self.data_root / "operations" / "state"
         delivery = load_json(state_root / "delivery.json")
+        image = image_metadata(self.data_root)
         health = load_json(state_root / "health-guard.json")
         reconcile = load_json(self.data_root / "delivery-reconcile-latest.json")
         database = load_json(self.data_root / "database-audit-latest.json")
@@ -785,6 +864,9 @@ class OperationsUI:
         return (
             "EFB 综合状态\n\n"
             f"EFB 运行时间：{format_uptime(self.started_at)}\n"
+            f"镜像构建时间：{format_image_build_time(image.get('build_time'))}\n"
+            f"运行版本：{runtime_version_text()}\n"
+            f"GHCR latest：{format_latest_match(image)}\n"
             f"微信：{self._wechat_login()}\n"
             f"最近退出时间：{format_session_timestamp(session_events.get('last_logout_at'))}\n"
             f"最近登录时间：{format_session_timestamp(session_events.get('last_login_at'))}\n"
@@ -797,9 +879,12 @@ class OperationsUI:
             f"失败诊断：{diagnostic_retention}\n"
             f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
             f"最近消息活动：{last_delivery}\n"
+            f"队列最近延迟：{format_queue_latency(delivery)}\n"
             f"投递队列：待处理 {queue['pending']}｜失败 {queue['failed']}\n"
             f"{reconcile_note}"
             f"Bridge 队列：{bridge_summary}\n"
+            f"审计：投递 {format_audit_status(reconcile)}｜数据库 {format_audit_status(database)}\n"
+            f"容量 {format_audit_status(capacity)}｜上游 {format_audit_status(upstream)}\n"
             f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
             f"映射数据库：{database_status}\n"
             f"NAS 磁盘剩余：{disk_text}\n"

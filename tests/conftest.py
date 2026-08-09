@@ -1,3 +1,8 @@
+import os
+import itertools
+import time
+from unittest.mock import patch
+
 import pytest
 from pathlib import Path
 
@@ -14,6 +19,60 @@ from .bot import get_bot
 from efb_telegram_master import TelegramChannel
 
 pytestmark = [pytest.mark.xfail(raises=TimedOut), pytest.mark.xfail(raises=NetworkError)]
+
+
+def offline_bot_post(*args, **kwargs):
+    """Return Telegram-shaped responses without contacting the Bot API."""
+    if args and not isinstance(args[0], str):
+        args = args[1:]
+    endpoint = args[0] if args else kwargs.get("endpoint", "")
+    data = args[1] if len(args) > 1 else kwargs.get("data")
+    data = data or {}
+    if endpoint == "getMe":
+        return {
+            "id": 1,
+            "is_bot": True,
+            "first_name": "CI",
+            "username": "ci_placeholder_bot",
+        }
+    if endpoint == "setMyCommands":
+        return True
+    if endpoint.startswith("get") or endpoint.startswith("delete"):
+        return True
+
+    chat_id = data.get("chat_id", 1)
+    try:
+        chat_id = int(chat_id)
+    except (TypeError, ValueError):
+        pass
+    message = {
+        "message_id": data.get("message_id") or next(offline_bot_post.message_ids),
+        "date": int(time.time()),
+        "chat": {"id": chat_id, "type": "private"},
+    }
+    if "text" in data:
+        message["text"] = data["text"]
+    if "caption" in data:
+        message["caption"] = data["caption"]
+    if endpoint in {"sendPhoto", "editMessageMedia"}:
+        message["photo"] = [{
+            "file_id": "ci-photo",
+            "file_unique_id": "ci-photo-unique",
+            "width": 1,
+            "height": 1,
+        }]
+    if endpoint in {"sendDocument", "editMessageMedia"}:
+        message["document"] = {
+            "file_id": "ci-document",
+            "file_unique_id": "ci-document-unique",
+            "file_name": data.get("filename", "ci.txt"),
+            "mime_type": "text/plain",
+            "file_size": 0,
+        }
+    return message
+
+
+offline_bot_post.message_ids = itertools.count(1)
 
 
 @pytest.fixture(scope='session')
@@ -82,6 +141,16 @@ def monkey_class():
 def coordinator(tmp_path_factory, monkey_class, bot_token, bot_admins) -> ehforwarderbot.coordinator:
     """Loaded coordinator with ETM and mock modules"""
     tmp_path = tmp_path_factory.mktemp("etm_test")
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    monkey_class.setenv("EFB_DATA_ROOT", str(data_root))
+    state_root = data_root / "operations" / "state"
+    monkey_class.setenv("EFB_DELIVERY_STATE", str(state_root / "delivery.json"))
+    monkey_class.setenv(
+        "EFB_FAILED_DELIVERY_STATE",
+        str(state_root / "failed-deliveries.json"),
+    )
+    monkey_class.setenv("EFB_FAILED_MEDIA_ROOT", str(data_root / "operations" / "failed-media"))
     monkey_class.setenv("EFB_DATA_PATH", str(tmp_path))
 
     # Framework configs
@@ -102,13 +171,21 @@ def coordinator(tmp_path_factory, monkey_class, bot_token, bot_admins) -> ehforw
         'admins': bot_admins
     })
 
-    ehforwarderbot.coordinator.add_channel(TelegramChannel())
-
-    yield ehforwarderbot.coordinator
-
-    ehforwarderbot.coordinator.master.stop_polling()
-    for i in ehforwarderbot.coordinator.slaves.values():
-        i.stop_polling()
+    offline_patch = patch(
+        "telegram.Bot._post",
+        side_effect=offline_bot_post,
+    ) if os.getenv("EFB_TEST_OFFLINE") == "1" else None
+    if offline_patch:
+        offline_patch.start()
+    try:
+        ehforwarderbot.coordinator.add_channel(TelegramChannel())
+        yield ehforwarderbot.coordinator
+    finally:
+        if offline_patch:
+            offline_patch.stop()
+        ehforwarderbot.coordinator.master.stop_polling()
+        for i in ehforwarderbot.coordinator.slaves.values():
+            i.stop_polling()
 
 
 @pytest.fixture(scope="module")
