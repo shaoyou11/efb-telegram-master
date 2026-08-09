@@ -16,14 +16,15 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       max-parallel: 4
       matrix:
-        python-version: [3.6, 3.7, 3.8]
+        python-version: ['3.10', '3.11', '3.12']
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v1
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
@@ -33,8 +34,8 @@ jobs:
         mypy --install-types --non-interactive -p efb_telegram_master
     - name: Install binary dependencies
       run: |
-        sudo apt update
-        sudo apt install -y ffmpeg libmagic-dev libwebp6
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg libmagic-dev libwebp-dev
     - name: Check with mypy
       run: |
         mypy -p efb_telegram_master --ignore-missing-imports
