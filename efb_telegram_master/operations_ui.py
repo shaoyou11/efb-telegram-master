@@ -14,6 +14,7 @@ from telegram.ext import CallbackContext
 from ehforwarderbot import coordinator
 
 from .bridge_queue_ui import BridgeQueueUI
+from .delivery_telemetry import delivery_stats_summary
 from .failed_media import cleanup_failed_media
 
 
@@ -228,6 +229,100 @@ def format_audit_status(report: dict) -> str:
     return f"{status}（检查时间{format_timestamp(report.get('checked_at'))}）"
 
 
+def format_delivery_stats(stats: dict) -> str:
+    if not isinstance(stats, dict):
+        stats = {}
+    try:
+        average = stats.get("average_latency_ms")
+        average_text = "暂无" if average is None else (
+            f"{float(average):.0f} 毫秒"
+            if float(average) < 1000
+            else f"{float(average) / 1000:.2f} 秒"
+        )
+    except (TypeError, ValueError):
+        average_text = "暂无"
+    return (
+        f"微信接收 {int(stats.get('inbound', 0) or 0)}｜"
+        f"Telegram成功 {int(stats.get('delivered', 0) or 0)}｜"
+        f"过滤 {int(stats.get('filtered', 0) or 0)}｜"
+        f"失败 {int(stats.get('failed', 0) or 0)}｜"
+        f"平均延迟 {average_text}"
+    )
+
+
+def format_backup_verification(report: dict) -> str:
+    if not report:
+        return "未检查"
+    status = "正常" if report.get("healthy", False) else "异常"
+    checks = []
+    manifest = report.get("manifest") or {}
+    sqlite = report.get("sqlite") or {}
+    decrypt = report.get("decrypt") or {}
+    if manifest.get("status") == "ok":
+        checks.append("清单")
+    if sqlite.get("status") == "ok":
+        checks.append("SQLite")
+    if decrypt.get("status") == "ok":
+        checks.append("解密")
+    elif decrypt.get("status") == "not_configured":
+        checks.append("解密未配置")
+    detail = f"（{'、'.join(checks)}）" if checks else ""
+    return f"{status}{detail}（检查时间{format_timestamp(report.get('checked_at'))}）"
+
+
+def format_maintenance_status(state: dict) -> str:
+    if not isinstance(state, dict) or not state:
+        return "关闭"
+    if state.get("enabled") or state.get("phase") not in (None, "", "idle"):
+        return f"进行中（{_clean_text(state.get('phase'), 30)}）"
+    result = state.get("last_result")
+    if result == "rollback":
+        return "关闭（上次已回滚）"
+    if result == "failed":
+        return "关闭（上次失败）"
+    return "关闭"
+
+
+def format_manual_restart(state: dict) -> str:
+    if not isinstance(state, dict) or not state:
+        return "暂无"
+    status = state.get("status")
+    if status == "requested":
+        return "等待执行"
+    if status == "running":
+        return "执行中"
+    if status == "completed":
+        return f"最近完成 {format_timestamp(state.get('completed_at'))}"
+    if status == "failed":
+        return f"失败（{_clean_text(state.get('reason'), 50)}）"
+    return "暂无"
+
+
+def request_manual_restart(path: Path, now=None, requested_by=None) -> dict:
+    path = Path(path)
+    existing = load_json(path)
+    if existing.get("status") in {"requested", "running"}:
+        return existing
+    now = time.time() if now is None else float(now)
+    payload = {
+        "version": 1,
+        "request_id": f"manual-{int(now * 1000)}",
+        "scope": "all",
+        "status": "requested",
+        "requested_at": now,
+    }
+    if requested_by is not None:
+        payload["requested_by"] = int(requested_by)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_name(f".{path.name}.tmp").open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    path.with_name(f".{path.name}.tmp").replace(path)
+    return payload
+
+
 def format_session_timestamp(value) -> str:
     try:
         timestamp = float(value)
@@ -362,10 +457,11 @@ class OperationsUI:
                 InlineKeyboardButton("失败诊断", callback_data="ops:diagnostic"),
             ])
             row = [InlineKeyboardButton("Bridge 队列", callback_data="bridgeq:home")]
+            row.append(InlineKeyboardButton("全部重启", callback_data="ops:restart-all"))
             if refresh:
                 row.append(InlineKeyboardButton("刷新", callback_data=f"ops:{refresh}"))
-            row.append(InlineKeyboardButton("关闭并删除", callback_data="ops:status-close"))
             rows.append(row)
+            rows.append([InlineKeyboardButton("关闭并删除", callback_data="ops:status-close")])
         else:
             row = []
             if refresh:
@@ -815,6 +911,9 @@ class OperationsUI:
         database = load_json(self.data_root / "database-audit-latest.json")
         capacity = load_json(self.data_root / "capacity-audit-latest.json")
         upstream = load_json(self.data_root / "upstream-audit-latest.json")
+        backup_audit = load_json(self.data_root / "backup-audit-latest.json")
+        maintenance = load_json(state_root / "maintenance.json")
+        manual_restart = load_json(state_root / "manual-restart.json")
         session_events = load_json(
             self.data_root
             / "profiles"
@@ -835,6 +934,7 @@ class OperationsUI:
         disk_text = f"{float(free_percent):.2f}%" if isinstance(free_percent, (int, float)) else "等待检查"
         queue = delivery_summary(self.data_root, reconcile)
         bridge_summary = self._bridge_queue_summary()
+        delivery_stats = delivery_stats_summary(state_root)
         updates = upstream.get("update_count", 0)
         if watchdog:
             recovery_text = (
@@ -880,11 +980,15 @@ class OperationsUI:
             f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
             f"最近消息活动：{last_delivery}\n"
             f"队列最近延迟：{format_queue_latency(delivery)}\n"
+            f"近24小时投递：{format_delivery_stats(delivery_stats)}\n"
             f"投递队列：待处理 {queue['pending']}｜失败 {queue['failed']}\n"
             f"{reconcile_note}"
             f"Bridge 队列：{bridge_summary}\n"
             f"审计：投递 {format_audit_status(reconcile)}｜数据库 {format_audit_status(database)}\n"
             f"容量 {format_audit_status(capacity)}｜上游 {format_audit_status(upstream)}\n"
+            f"备份校验：{format_backup_verification(backup_audit)}\n"
+            f"维护模式：{format_maintenance_status(maintenance)}\n"
+            f"手动重启：{format_manual_restart(manual_restart)}\n"
             f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
             f"映射数据库：{database_status}\n"
             f"NAS 磁盘剩余：{disk_text}\n"
@@ -963,6 +1067,25 @@ class OperationsUI:
 
     def status(self, update: Update, context: CallbackContext):
         self.health(update, context)
+
+    def restart_all(self, update: Update, _context: CallbackContext):
+        if not self._allowed(update):
+            return
+        state_path = self.data_root / "operations" / "state" / "manual-restart.json"
+        state = request_manual_restart(
+            state_path,
+            requested_by=getattr(update.effective_user, "id", None),
+        )
+        if state.get("status") == "requested":
+            text = (
+                "EFB 全部重启\n\n"
+                "已提交手动重启请求。NAS 健康守护会按依赖顺序处理："
+                "ComWechat → Bot API 与 watchdog → EFB，并在完成后检查四项健康状态。\n\n"
+                "执行期间消息转发会短暂暂停，不会删除微信会话或配置。"
+            )
+        else:
+            text = f"EFB 全部重启\n\n当前已有请求：{format_manual_restart(state)}。"
+        self._send(update, text, "status", include_bridge=True)
 
     def bridge(self, update: Update, context: CallbackContext):
         self.bridge_queue_ui.command(update, context)
@@ -1051,6 +1174,7 @@ class OperationsUI:
         handlers = {
             "health": self.health,
             "status": self.status,
+            "restart-all": self.restart_all,
             "delivery": self.delivery_detail,
             "errors": self.errors,
             "diagnostic": self.diagnostic,
