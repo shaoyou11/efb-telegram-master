@@ -11,6 +11,7 @@ from pathlib import Path
 TOKEN = re.compile(r"bot\d+:[^/\s]+")
 URL = re.compile(r"https?://[^\s]+")
 PATH = re.compile(r"(?:/[\w .-]+){2,}")
+STATS_RETENTION_SECONDS = 3 * 24 * 60 * 60
 
 
 def sanitize_failure(value: str) -> str:
@@ -36,10 +37,12 @@ def recovery_action(state: dict, logged_in: bool, now: float, last_restart_at: f
 
 
 class DeliveryTelemetry:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, stats_path: Path = None):
         self.path = Path(path)
+        self.stats_path = Path(stats_path) if stats_path else self.path.with_name("delivery-stats.json")
         self.lock = threading.Lock()
         self.state = self._load()
+        self.stats = self._load_stats()
 
     def _load(self):
         try:
@@ -58,6 +61,20 @@ class DeliveryTelemetry:
             "last_latency_ms": None,
         }
 
+    def _load_stats(self):
+        try:
+            data = json.loads(self.stats_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and isinstance(data.get("buckets"), dict):
+                buckets = {
+                    str(key): value
+                    for key, value in data["buckets"].items()
+                    if _valid_bucket_key(key) and isinstance(value, dict)
+                }
+                return {"version": 1, "buckets": buckets}
+        except (OSError, ValueError, TypeError):
+            pass
+        return {"version": 1, "buckets": {}}
+
     def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=str(self.path.parent),
@@ -69,18 +86,74 @@ class DeliveryTelemetry:
             temporary = handle.name
         os.replace(temporary, self.path)
 
+    def _save_stats(self):
+        self.stats_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=str(self.stats_path.parent),
+            prefix=".delivery-stats.", delete=False,
+        ) as handle:
+            json.dump(self.stats, handle, ensure_ascii=False, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = handle.name
+        os.replace(temporary, self.stats_path)
+
+    @staticmethod
+    def _bucket_key(now: float) -> str:
+        return str(int(float(now) // 3600) * 3600)
+
+    def _record_stat(self, field: str, now: float, latency_ms=None):
+        buckets = self.stats.setdefault("buckets", {})
+        key = self._bucket_key(now)
+        bucket = buckets.get(key)
+        if not isinstance(bucket, dict):
+            bucket = {
+                "inbound": 0,
+                "delivered": 0,
+                "filtered": 0,
+                "failed": 0,
+                "latency_ms_total": 0,
+                "latency_count": 0,
+            }
+            buckets[key] = bucket
+        try:
+            current = int(bucket.get(field, 0) or 0)
+        except (TypeError, ValueError):
+            current = 0
+        bucket[field] = current + 1
+        if latency_ms is not None:
+            try:
+                latency_total = float(bucket.get("latency_ms_total", 0) or 0)
+            except (TypeError, ValueError):
+                latency_total = 0.0
+            try:
+                latency_count = int(bucket.get("latency_count", 0) or 0)
+            except (TypeError, ValueError):
+                latency_count = 0
+            bucket["latency_ms_total"] = latency_total + latency_ms
+            bucket["latency_count"] = latency_count + 1
+        cutoff = float(now) - STATS_RETENTION_SECONDS
+        self.stats["buckets"] = {
+            bucket_key: value
+            for bucket_key, value in buckets.items()
+            if _valid_bucket_key(bucket_key) and float(bucket_key) >= cutoff
+        }
+
     def inbound(self, uid: str, message_type: str, size: int = 0):
         with self.lock:
             now = time.time()
             self.state["last_inbound_at"] = now
             self.state["pending"] = {"uid": str(uid), "type": str(message_type),
                                      "size": int(size), "at": now}
+            self._record_stat("inbound", now)
             self._save()
+            self._save_stats()
 
-    def _finish(self, uid: str, now: float) -> None:
+    def _finish(self, uid: str, now: float):
         pending = self.state.get("pending") or {}
         if str(pending.get("uid") or "") != str(uid):
-            return
+            return None
         try:
             latency_ms = max(0.0, (now - float(pending["at"])) * 1000)
         except (KeyError, TypeError, ValueError):
@@ -88,21 +161,26 @@ class DeliveryTelemetry:
         if latency_ms is not None:
             self.state["last_latency_ms"] = round(latency_ms)
         self.state["pending"] = None
+        return latency_ms
 
     def delivered(self, uid: str):
         with self.lock:
             now = time.time()
             self.state["last_delivered_at"] = now
-            self._finish(uid, now)
+            latency_ms = self._finish(uid, now)
+            self._record_stat("delivered", now, latency_ms)
             self.state["last_failure"] = None
             self._save()
+            self._save_stats()
 
     def filtered(self, uid: str):
         with self.lock:
             now = time.time()
             self.state["last_filtered_at"] = now
-            self._finish(uid, now)
+            latency_ms = self._finish(uid, now)
+            self._record_stat("filtered", now, latency_ms)
             self._save()
+            self._save_stats()
 
     def failed(self, uid: str, reason: str):
         with self.lock:
@@ -112,8 +190,60 @@ class DeliveryTelemetry:
                 "reason": sanitize_failure(reason),
                 "at": now,
             }
-            self._finish(uid, now)
+            latency_ms = self._finish(uid, now)
+            self._record_stat("failed", now, latency_ms)
             self._save()
+            self._save_stats()
+
+
+def _valid_bucket_key(value) -> bool:
+    try:
+        float(value)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def delivery_stats_summary(state_root: Path, now=None) -> dict:
+    path = Path(state_root) / "delivery-stats.json"
+    data = {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            data = loaded
+    except (OSError, ValueError, TypeError):
+        pass
+
+    now = time.time() if now is None else float(now)
+    cutoff = now - 24 * 60 * 60
+    result = {
+        "inbound": 0,
+        "delivered": 0,
+        "filtered": 0,
+        "failed": 0,
+        "average_latency_ms": None,
+    }
+    latency_total = 0.0
+    latency_count = 0
+    for key, bucket in (data.get("buckets") or {}).items():
+        if not _valid_bucket_key(key) or not isinstance(bucket, dict):
+            continue
+        bucket_time = float(key)
+        if bucket_time < cutoff or bucket_time > now:
+            continue
+        for field in ("inbound", "delivered", "filtered", "failed"):
+            try:
+                result[field] += max(0, int(bucket.get(field, 0) or 0))
+            except (TypeError, ValueError):
+                continue
+        try:
+            latency_total += max(0.0, float(bucket.get("latency_ms_total", 0) or 0))
+            latency_count += max(0, int(bucket.get("latency_count", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+    if latency_count:
+        result["average_latency_ms"] = round(latency_total / latency_count)
+    return result
 
 
 class DeliveryGuard:

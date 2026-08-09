@@ -9,11 +9,15 @@ from efb_telegram_master.operations_ui import (
     _human_size,
     backup_summary,
     delivery_summary,
+    format_backup_verification,
+    format_delivery_stats,
+    format_manual_restart,
     format_audit_status,
     format_timestamp,
     format_uptime,
     load_json,
     redact_error,
+    request_manual_restart,
     scan_sensitive_keys,
 )
 
@@ -45,6 +49,19 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
         "last_delivered_at": 1000,
         "last_latency_ms": 1250,
     }), encoding="utf-8")
+    (state / "delivery-stats.json").write_text(json.dumps({
+        "version": 1,
+        "buckets": {
+            "0": {
+                "inbound": 3,
+                "delivered": 1,
+                "filtered": 1,
+                "failed": 1,
+                "latency_ms_total": 3500,
+                "latency_count": 3,
+            },
+        },
+    }), encoding="utf-8")
     (state / "health-guard.json").write_text(json.dumps({
         "healthy": True,
         "action": "healthy",
@@ -73,6 +90,19 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
         "build_time": "2026-08-09T13:11:16Z",
         "latest_match": True,
         "checked_at": 4660,
+    }), encoding="utf-8")
+    (tmp_path / "backup-audit-latest.json").write_text(json.dumps({
+        "healthy": True,
+        "checked_at": 4660,
+        "manifest": {"status": "ok"},
+        "sqlite": {"status": "ok"},
+        "decrypt": {"status": "not_configured"},
+    }), encoding="utf-8")
+    (state / "maintenance.json").write_text(json.dumps({
+        "enabled": False,
+        "phase": "idle",
+        "last_result": "success",
+        "last_completed_at": 4660,
     }), encoding="utf-8")
     session_path = tmp_path / "profiles/comwechat/honus.comwechat"
     session_path.mkdir(parents=True)
@@ -123,6 +153,10 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     assert "运行版本：" in text
     assert "GHCR latest：匹配" in text
     assert "队列最近延迟：最近完成 1.25 秒" in text
+    assert "近24小时投递：微信接收 3｜Telegram成功 1｜过滤 1｜失败 1｜平均延迟 1.17 秒" in text
+    assert "备份校验：正常" in text
+    assert "维护模式：关闭" in text
+    assert "手动重启：暂无" in text
 
 
 def test_status_falls_back_to_persistent_delivery_queues(tmp_path, monkeypatch):
@@ -239,10 +273,52 @@ def test_status_markup_uses_two_rows_of_three_buttons():
         "投递明细", "异常中心", "失败诊断",
     ]
     assert [button.text for button in markup.inline_keyboard[1]] == [
-        "Bridge 队列", "刷新", "关闭并删除",
+        "Bridge 队列", "全部重启", "刷新",
     ]
 
-    assert markup.inline_keyboard[1][2].callback_data == "ops:status-close"
+    assert [button.text for button in markup.inline_keyboard[2]] == ["关闭并删除"]
+    assert markup.inline_keyboard[2][0].callback_data == "ops:status-close"
+
+
+def test_delivery_stats_format_is_content_free():
+    assert format_delivery_stats({
+        "inbound": 2,
+        "delivered": 1,
+        "filtered": 0,
+        "failed": 1,
+        "average_latency_ms": 850,
+    }) == "微信接收 2｜Telegram成功 1｜过滤 0｜失败 1｜平均延迟 850 毫秒"
+
+
+def test_backup_verification_format_reports_read_only_checks():
+    text = format_backup_verification({
+        "healthy": True,
+        "checked_at": 1000,
+        "manifest": {"status": "ok"},
+        "sqlite": {"status": "ok"},
+        "decrypt": {"status": "not_configured"},
+    })
+
+    assert text.startswith("正常（清单、SQLite、解密未配置）")
+
+
+def test_manual_restart_request_is_atomic_and_idempotent(tmp_path):
+    path = tmp_path / "manual-restart.json"
+
+    first = request_manual_restart(path, now=1000, requested_by=7)
+    second = request_manual_restart(path, now=1001, requested_by=7)
+
+    assert first["status"] == "requested"
+    assert second["status"] == "requested"
+    assert second["request_id"] == first["request_id"]
+    assert json.loads(path.read_text(encoding="utf-8"))["requested_by"] == 7
+
+
+def test_manual_restart_status_text_does_not_expose_request_details():
+    assert format_manual_restart({"status": "running"}) == "执行中"
+    assert format_manual_restart({"status": "completed", "completed_at": 1000}) == (
+        f"最近完成 {format_timestamp(1000)}"
+    )
 
 
 def test_status_close_deletes_report_and_source_command():

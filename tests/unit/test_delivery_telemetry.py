@@ -1,6 +1,11 @@
 import json
 
-from efb_telegram_master.delivery_telemetry import DeliveryTelemetry, recovery_action, sanitize_failure
+from efb_telegram_master.delivery_telemetry import (
+    DeliveryTelemetry,
+    delivery_stats_summary,
+    recovery_action,
+    sanitize_failure,
+)
 
 
 def test_delivery_telemetry_records_and_clears_pending(tmp_path):
@@ -35,6 +40,48 @@ def test_legacy_delivery_state_gets_latency_field(tmp_path):
     telemetry = DeliveryTelemetry(path)
 
     assert telemetry.state["last_latency_ms"] is None
+
+
+def test_delivery_telemetry_persists_24_hour_aggregate_stats(tmp_path, monkeypatch):
+    path = tmp_path / "delivery.json"
+    telemetry = DeliveryTelemetry(path)
+
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 100000.0)
+    telemetry.inbound("message-1", "Image")
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 100001.0)
+    telemetry.delivered("message-1")
+
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 100001.5)
+    telemetry.inbound("message-2", "Text")
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 100002.0)
+    telemetry.filtered("message-2")
+
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 100003.0)
+    telemetry.inbound("message-3", "File")
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 100005.0)
+    telemetry.failed("message-3", "temporary failure")
+
+    result = delivery_stats_summary(tmp_path, now=100005.0)
+
+    assert result == {
+        "inbound": 3,
+        "delivered": 1,
+        "filtered": 1,
+        "failed": 1,
+        "average_latency_ms": 1167,
+    }
+
+
+def test_delivery_stats_ignore_buckets_older_than_24_hours(tmp_path, monkeypatch):
+    path = tmp_path / "delivery.json"
+    telemetry = DeliveryTelemetry(path)
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 100000.0)
+    telemetry.inbound("old-message", "Text")
+
+    result = delivery_stats_summary(tmp_path, now=100000.0 + 25 * 3600)
+
+    assert result["inbound"] == 0
+    assert result["average_latency_ms"] is None
 
 
 def test_failure_reason_is_redacted():
