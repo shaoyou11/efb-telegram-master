@@ -144,6 +144,13 @@ def coordinator(tmp_path_factory, monkey_class, bot_token, bot_admins) -> ehforw
     data_root = tmp_path / "data"
     data_root.mkdir()
     monkey_class.setenv("EFB_DATA_ROOT", str(data_root))
+    state_root = data_root / "operations" / "state"
+    monkey_class.setenv("EFB_DELIVERY_STATE", str(state_root / "delivery.json"))
+    monkey_class.setenv(
+        "EFB_FAILED_DELIVERY_STATE",
+        str(state_root / "failed-deliveries.json"),
+    )
+    monkey_class.setenv("EFB_FAILED_MEDIA_ROOT", str(data_root / "operations" / "failed-media"))
     monkey_class.setenv("EFB_DATA_PATH", str(tmp_path))
 
     # Framework configs
