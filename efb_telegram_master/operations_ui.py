@@ -95,6 +95,20 @@ def _package_version(name: str) -> str:
         return "未知"
 
 
+def _finder_feed_summary(channel) -> str:
+    status = getattr(channel, "finder_feed_status", None)
+    if not callable(status):
+        return "未启用"
+    try:
+        result = status()
+        return (
+            f"等待 {result.get('waiting', 0)}｜请求 {result.get('requested', 0)}｜"
+            f"处理中 {result.get('processing', 0)}｜失败 {result.get('failed', 0)}"
+        )
+    except Exception:
+        return "检查失败"
+
+
 def load_json(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -989,6 +1003,7 @@ class OperationsUI:
             f"备份校验：{format_backup_verification(backup_audit)}\n"
             f"维护模式：{format_maintenance_status(maintenance)}\n"
             f"手动重启：{format_manual_restart(manual_restart)}\n"
+            f"视频号任务：{_finder_feed_summary(self.channel)}\n"
             f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
             f"映射数据库：{database_status}\n"
             f"NAS 磁盘剩余：{disk_text}\n"

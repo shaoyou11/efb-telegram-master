@@ -142,6 +142,9 @@ class TelegramChannel(MasterChannel):
             efb_utils.get_config_path(self.channel_id).parent / "author-name-spoiler.json")
         self.chat_dest_cache: ChatDestinationCache = ChatDestinationCache(self.flag("send_to_last_chat"))
         self.bot_manager: TelegramBotManager = TelegramBotManager(self)
+        self.bot_manager.dispatcher.add_handler(
+            CallbackQueryHandler(self.finder_feed_callback, pattern=r"^finder:")
+        )
         self.commands: CommandsManager = CommandsManager(self)
         self.chat_binding: ChatBindingManager = ChatBindingManager(self)
         data_root = Path(os.getenv("EFB_DATA_ROOT", "/data"))
@@ -281,6 +284,41 @@ class TelegramChannel(MasterChannel):
         if not update.effective_user or update.effective_user.id not in self.config['admins']:
             return
         self._render_cleanup(update)
+
+    def finder_feed_callback(self, update: Update, context: CallbackContext):
+        query = update.callback_query
+        if not query:
+            return
+        user = update.effective_user
+        if not user or user.id not in self.config.get("admins", []):
+            query.answer("仅管理员可以获取视频", show_alert=True)
+            return
+        job_id = str(query.data or "")[len("finder:"):]
+        if not job_id or len(job_id) > 64:
+            query.answer("视频任务无效", show_alert=True)
+            return
+        try:
+            channel = coordinator.get_module_by_id("honus.comwechat")
+            result = channel.request_finder_feed_video(job_id)
+        except Exception:
+            self.logger.exception("视频号任务提交失败: job=%s", job_id)
+            query.answer("提交失败，请稍后重试", show_alert=True)
+            return
+        messages = {
+            "queued": "已加入视频获取队列",
+            "already_queued": "视频正在获取中",
+            "sent": "视频已处理",
+            "failed": "任务之前处理失败，请重新转发",
+            "expired": "视频任务已过期，请重新转发",
+        }
+        query.answer(
+            messages.get(result, "任务状态未知"),
+            show_alert=result not in {"queued", "already_queued"},
+        )
+        try:
+            query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            self.logger.debug("移除视频号按钮失败: job=%s", job_id, exc_info=True)
 
     def _render_cleanup(self, update: Update):
         report = load_storage_report()
