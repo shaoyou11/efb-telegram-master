@@ -350,6 +350,49 @@ def format_session_timestamp(value) -> str:
         return "暂无"
 
 
+def format_session_event(events: dict, event: str) -> str:
+    key = f"last_{event}_at"
+    value = events.get(key) if isinstance(events, dict) else None
+    if value not in (None, ""):
+        return format_session_timestamp(value)
+    state = events.get("current_state") if isinstance(events, dict) else None
+    if event == "login" and state == "online":
+        return "监测开始前已登录（时间未知）"
+    if event == "logout" and state == "offline":
+        return "监测开始前已退出（时间未知）"
+    return "暂无"
+
+
+def format_health_action(value) -> str:
+    text = str(value or "none").strip().lower()
+    labels = {
+        "none": "暂无",
+        "healthy": "正常",
+        "wait": "等待复检",
+        "cooldown": "冷却中",
+        "hold": "等待 ComWechat 内部恢复",
+        "restart": "正在准备恢复",
+    }
+    if text in labels:
+        return labels[text]
+
+    scopes = {
+        "full": "全部服务",
+        "efb": "EFB",
+        "telegram": "Telegram Bot API 与 EFB",
+        "watchdog": "Watchdog",
+        "dependents": "依赖服务",
+        "hold": "ComWechat",
+    }
+    if text.startswith("recovered:"):
+        scope = scopes.get(text.split(":", 1)[1], "相关服务")
+        return f"已恢复（{scope}）"
+    if text.startswith("restart_failed:"):
+        scope = scopes.get(text.split(":", 1)[1], "相关服务")
+        return f"恢复失败（{scope}）"
+    return _clean_text(value, 60)
+
+
 def format_uptime(started_at, now=None) -> str:
     try:
         elapsed = max(0, int((time.time() if now is None else now) - float(started_at)))
@@ -949,6 +992,12 @@ class OperationsUI:
         queue = delivery_summary(self.data_root, reconcile)
         bridge_summary = self._bridge_queue_summary()
         delivery_stats = delivery_stats_summary(state_root)
+        version_lines = "\n".join(
+            f"  {item}" for item in runtime_version_text().split("｜")
+        )
+        delivery_stats_lines = "\n".join(
+            f"  {item}" for item in format_delivery_stats(delivery_stats).split("｜")
+        )
         updates = upstream.get("update_count", 0)
         if watchdog:
             recovery_text = (
@@ -977,39 +1026,46 @@ class OperationsUI:
         )
         return (
             "EFB 综合状态\n\n"
-            f"EFB 运行时间：{format_uptime(self.started_at)}\n"
-            f"镜像构建时间：{format_image_build_time(image.get('build_time'))}\n"
-            f"运行版本：{runtime_version_text()}\n"
+            "【运行环境】\n"
+            f"运行时间：{format_uptime(self.started_at)}\n"
+            f"镜像构建：{format_image_build_time(image.get('build_time'))}\n"
+            f"运行版本：\n{version_lines}\n"
             f"GHCR latest：{format_latest_match(image)}\n"
-            f"微信：{self._wechat_login()}\n"
-            f"最近退出时间：{format_session_timestamp(session_events.get('last_logout_at'))}\n"
-            f"最近登录时间：{format_session_timestamp(session_events.get('last_login_at'))}\n"
+            "\n【微信与自动恢复】\n"
+            f"微信状态：{self._wechat_login()}\n"
+            f"最近登录：{format_session_event(session_events, 'login')}\n"
+            f"最近退出：{format_session_event(session_events, 'logout')}\n"
             f"Telegram Bot API：{self._bot_api()}\n"
             f"四容器与共享网络：{stack_status}\n"
-            f"最近恢复动作：{health.get('action', '暂无')}\n"
+            f"最近恢复动作：{format_health_action(health.get('action'))}\n"
             f"自动恢复：{recovery_text}\n"
             f"恢复时段：{recovery_window}\n"
             f"恢复配置：{recovery_config}\n"
             f"失败诊断：{diagnostic_retention}\n"
             f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
+            "\n【消息投递】\n"
             f"最近消息活动：{last_delivery}\n"
             f"队列最近延迟：{format_queue_latency(delivery)}\n"
-            f"近24小时投递：{format_delivery_stats(delivery_stats)}\n"
+            f"近24小时投递：\n{delivery_stats_lines}\n"
             f"投递队列：待处理 {queue['pending']}｜失败 {queue['failed']}\n"
             f"{reconcile_note}"
             f"Bridge 队列：{bridge_summary}\n"
-            f"审计：投递 {format_audit_status(reconcile)}｜数据库 {format_audit_status(database)}\n"
-            f"容量 {format_audit_status(capacity)}｜上游 {format_audit_status(upstream)}\n"
+            f"视频号任务：{_finder_feed_summary(self.channel)}\n"
+            f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
+            "\n【巡检与存储】\n"
+            f"投递审计：{format_audit_status(reconcile)}\n"
+            f"数据库审计：{format_audit_status(database)}\n"
+            f"容量审计：{format_audit_status(capacity)}\n"
+            f"上游审计：{format_audit_status(upstream)}\n"
             f"备份校验：{format_backup_verification(backup_audit)}\n"
             f"维护模式：{format_maintenance_status(maintenance)}\n"
             f"手动重启：{format_manual_restart(manual_restart)}\n"
-            f"视频号任务：{_finder_feed_summary(self.channel)}\n"
-            f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
             f"映射数据库：{database_status}\n"
             f"NAS 磁盘剩余：{disk_text}\n"
             f"待评估上游更新：{updates} 项\n"
             f"配置备份：{backup['count']} 份｜{_human_size(backup['bytes'])}\n"
-            f"镜像版本：{os.getenv('EFB_IMAGE_REVISION', '未知')}"
+            "\n【版本标识】\n"
+            f"{os.getenv('EFB_IMAGE_REVISION', '未知')}"
         )
 
     def health(self, update: Update, _context: CallbackContext):

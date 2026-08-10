@@ -11,6 +11,7 @@ from efb_telegram_master.operations_ui import (
     delivery_summary,
     format_backup_verification,
     format_delivery_stats,
+    format_health_action,
     format_manual_restart,
     format_audit_status,
     format_timestamp,
@@ -146,24 +147,55 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     assert "待处理 1｜失败 2" in text
     assert "NAS 磁盘剩余：75.50%" in text
     assert "待评估上游更新：3 项" in text
-    assert "EFB 运行时间：1小时 1分钟" in text
+    assert "【运行环境】" in text
+    assert "运行时间：1小时 1分钟" in text
     assert "群成员姓名隐藏：开启" in text
-    assert "最近退出时间：2026-08-08 03:12:00" in text
-    assert "最近登录时间：2026-08-08 03:30:00" in text
+    assert "最近退出：2026-08-08 03:12:00" in text
+    assert "最近登录：2026-08-08 03:30:00" in text
+    assert "最近恢复动作：正常" in text
     assert "自动恢复：总开关开启｜全天开启｜凌晨关闭" in text
     assert "Bridge 队列：暂存 0｜待投递 0｜处理中 0｜总计 0｜死信 1" in text
-    assert "审计：投递 正常" in text
-    assert "数据库 正常" in text
-    assert "上游 正常" in text
-    assert "镜像构建时间：2026-08-09 21:11:16" in text
+    assert "投递审计：正常" in text
+    assert "数据库审计：正常" in text
+    assert "上游审计：正常" in text
+    assert "镜像构建：2026-08-09 21:11:16" in text
     assert "运行版本：" in text
     assert "GHCR latest：匹配" in text
     assert "队列最近延迟：最近完成 1.25 秒" in text
-    assert "近24小时投递：微信接收 3｜Telegram成功 1｜过滤 1｜失败 1｜平均延迟 1.17 秒" in text
+    assert "近24小时投递：\n  微信接收 3\n  Telegram成功 1" in text
     assert "备份校验：正常" in text
     assert "维护模式：关闭" in text
     assert "手动重启：暂无" in text
     assert "视频号任务：等待 1｜请求 2｜处理中 0｜失败 0" in text
+
+
+def test_status_explains_unknown_time_after_tracking_baseline(tmp_path, monkeypatch):
+    session_path = tmp_path / "profiles/comwechat/honus.comwechat"
+    session_path.mkdir(parents=True)
+    (session_path / "session-events.json").write_text(json.dumps({
+        "version": 1,
+        "current_state": "online",
+        "tracking_started_at": 1000,
+    }), encoding="utf-8")
+
+    ui = OperationsUI.__new__(OperationsUI)
+    ui.data_root = Path(tmp_path)
+    ui.started_at = 1000
+    ui.channel = SimpleNamespace()
+    monkeypatch.setattr(ui, "_wechat_login", lambda: "已登录")
+    monkeypatch.setattr(ui, "_bot_api", lambda: "正常")
+    monkeypatch.setattr("efb_telegram_master.operations_ui.time.time", lambda: 1000)
+
+    text = ui.health_text()
+
+    assert "最近登录：监测开始前已登录（时间未知）" in text
+    assert "最近退出：暂无" in text
+
+
+def test_health_action_is_localized():
+    assert format_health_action("healthy") == "正常"
+    assert format_health_action("recovered:efb") == "已恢复（EFB）"
+    assert format_health_action("restart_failed:full") == "恢复失败（全部服务）"
 
 
 def test_status_falls_back_to_persistent_delivery_queues(tmp_path, monkeypatch):
