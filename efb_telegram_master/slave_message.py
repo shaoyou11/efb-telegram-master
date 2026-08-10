@@ -428,7 +428,6 @@ class SlaveMessageProcessor(LocaleMixin):
             return
         query.message.delete()
 
-    @staticmethod
     def handle_topic_error(fn):
         def wrapper(*args, **kwargs):
             try:
@@ -497,6 +496,18 @@ class SlaveMessageProcessor(LocaleMixin):
             for idx, i in enumerate(commands):
                 buttons.append([InlineKeyboardButton(i.name, callback_data=str(idx))])
             reply_markup = InlineKeyboardMarkup(buttons)
+
+        finder_metadata = (getattr(msg, "vendor_specific", {}) or {}).get("finder_feed")
+        if isinstance(finder_metadata, dict) and finder_metadata.get("job_id"):
+            finder_buttons = [[
+                InlineKeyboardButton(
+                    "获取视频",
+                    callback_data=f"finder:{finder_metadata['job_id']}",
+                )
+            ]]
+            if reply_markup:
+                finder_buttons.extend(reply_markup.inline_keyboard)
+            reply_markup = InlineKeyboardMarkup(finder_buttons)
 
         reactions = self.build_reactions_footer(msg.reactions)
 
