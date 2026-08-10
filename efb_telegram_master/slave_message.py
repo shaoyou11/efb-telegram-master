@@ -47,6 +47,7 @@ from .failed_media import cleanup_failed_media, persist_failed_media
 from .file_size_policy import exceeds_bot_api_limit
 from .locale_mixin import LocaleMixin
 from .message import ETMMsg
+from .recall_notice import format_wechat_recall_notice
 from .msg_type import get_msg_type
 from .utils import TelegramChatID, TelegramTopicID, TelegramMessageID, OldMsgID
 
@@ -496,18 +497,6 @@ class SlaveMessageProcessor(LocaleMixin):
             for idx, i in enumerate(commands):
                 buttons.append([InlineKeyboardButton(i.name, callback_data=str(idx))])
             reply_markup = InlineKeyboardMarkup(buttons)
-
-        finder_metadata = (getattr(msg, "vendor_specific", {}) or {}).get("finder_feed")
-        if isinstance(finder_metadata, dict) and finder_metadata.get("job_id"):
-            finder_buttons = [[
-                InlineKeyboardButton(
-                    "获取视频",
-                    callback_data=f"finder:{finder_metadata['job_id']}",
-                )
-            ]]
-            if reply_markup:
-                finder_buttons.extend(reply_markup.inline_keyboard)
-            reply_markup = InlineKeyboardMarkup(finder_buttons)
 
         reactions = self.build_reactions_footer(msg.reactions)
 
@@ -1422,6 +1411,9 @@ class SlaveMessageProcessor(LocaleMixin):
         elif isinstance(status, MessageRemoval):
             self.logger.debug("Received message removal request from channel %s on message %s",
                               status.source_channel, status.message)
+            recall_notice = format_wechat_recall_notice(
+                getattr(status.message, "vendor_specific", {}) or {}
+            )
             old_msg = self.db.get_msg_log(
                 slave_msg_id=status.message.uid,
                 slave_origin_uid=utils.chat_id_to_str(chat=status.message.chat))
@@ -1429,6 +1421,14 @@ class SlaveMessageProcessor(LocaleMixin):
                 old_msg_id: OldMsgID = utils.message_id_str_to_id(old_msg.master_msg_id)
                 self.logger.debug("Found message to delete in Telegram: %s.%s",
                                   *old_msg_id)
+                if recall_notice:
+                    self.bot.send_message(
+                        chat_id=old_msg_id[0],
+                        text=recall_notice,
+                        reply_to_message_id=old_msg_id[1],
+                        disable_notification=True,
+                    )
+                    return
                 try:
                     if not self.channel.flag('prevent_message_removal'):
                         self.bot.delete_message(*old_msg_id)

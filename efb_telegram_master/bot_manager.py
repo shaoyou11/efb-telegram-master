@@ -1,6 +1,7 @@
 # coding=utf-8
 import collections
 import io
+import json
 import logging
 import os
 from functools import wraps
@@ -36,6 +37,25 @@ class TelegramBotManager(LocaleMixin):
 
     webhook = False
     logger = logging.getLogger(__name__)
+
+    @staticmethod
+    def _normalize_media_kwargs(kwargs):
+        """Keep legacy multipart encoding from receiving mapping values."""
+        normalized = dict(kwargs)
+        for key, value in list(normalized.items()):
+            if key == "api_kwargs" and isinstance(value, collections.abc.Mapping):
+                api_kwargs = dict(value)
+                for api_key, api_value in list(api_kwargs.items()):
+                    if isinstance(api_value, collections.abc.Mapping):
+                        api_kwargs[api_key] = json.dumps(
+                            api_value, ensure_ascii=False, separators=(",", ":")
+                        )
+                normalized[key] = api_kwargs
+            elif isinstance(value, collections.abc.Mapping):
+                normalized[key] = json.dumps(
+                    value, ensure_ascii=False, separators=(",", ":")
+                )
+        return normalized
 
     class Decorators:
         logger = logging.getLogger(__name__)
@@ -361,6 +381,7 @@ class TelegramBotManager(LocaleMixin):
         Returns:
             telegram.Message
         """
+        kwargs = self._normalize_media_kwargs(kwargs)
         try:
             return self.updater.bot.send_audio(*args, **kwargs)
         except telegram.error.BadRequest:
@@ -387,6 +408,7 @@ class TelegramBotManager(LocaleMixin):
         Returns:
             telegram.Message
         """
+        kwargs = self._normalize_media_kwargs(kwargs)
         try:
             return self.updater.bot.send_voice(*args, **kwargs)
         except telegram.error.BadRequest:
@@ -413,6 +435,7 @@ class TelegramBotManager(LocaleMixin):
         Returns:
             telegram.Message
         """
+        kwargs = self._normalize_media_kwargs(kwargs)
         try:
             return self.updater.bot.send_video(*args, **kwargs)
         except telegram.error.BadRequest:
@@ -437,6 +460,7 @@ class TelegramBotManager(LocaleMixin):
         Returns:
             telegram.Message
         """
+        kwargs = self._normalize_media_kwargs(kwargs)
         return self.updater.bot.send_document(*args, **kwargs)
 
     @Decorators.retry_on_timeout
@@ -458,6 +482,7 @@ class TelegramBotManager(LocaleMixin):
         Returns:
             telegram.Message
         """
+        kwargs = self._normalize_media_kwargs(kwargs)
         return self.updater.bot.send_animation(*args, **kwargs)
 
     @Decorators.retry_on_timeout
@@ -479,6 +504,7 @@ class TelegramBotManager(LocaleMixin):
         Returns:
             telegram.Message
         """
+        kwargs = self._normalize_media_kwargs(kwargs)
         try:
             return self.updater.bot.send_photo(*args, **kwargs)
         except telegram.error.BadRequest:
