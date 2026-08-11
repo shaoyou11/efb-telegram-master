@@ -1,6 +1,7 @@
 # coding=utf-8
 
 import logging
+import re
 from pickle import UnpicklingError
 from queue import Queue
 from threading import Thread
@@ -40,6 +41,7 @@ class MasterMessageProcessor(LocaleMixin):
     """
 
     DELETE_FLAG = 'rm`'
+    TG_IMAGE_DOCUMENT_RE = re.compile(r"^tg_image_.+\.png$", re.IGNORECASE)
 
     # Constants
     TYPE_DICT = {
@@ -246,6 +248,14 @@ class MasterMessageProcessor(LocaleMixin):
             return chats[0]
         return None
 
+    @classmethod
+    def is_tg_image_document(cls, message: Message) -> bool:
+        document = getattr(message, "document", None)
+        if not document:
+            return False
+        file_name = getattr(document, "file_name", None) or ""
+        return bool(cls.TG_IMAGE_DOCUMENT_RE.fullmatch(file_name))
+
     def process_telegram_message(self, update: Update, context: CallbackContext,
                                  destination: EFBChannelChatIDStr, quote: bool = False,
                                  edited: Optional["MsgLog"] = None):
@@ -288,6 +298,14 @@ class MasterMessageProcessor(LocaleMixin):
                 raise EFBMessageTypeNotSupported(
                     self._("{type_name} messages are not supported by EFB Telegram Master channel.")
                         .format(type_name=mtype.name))
+
+            if mtype is TGMsgType.Document and self.is_tg_image_document(message):
+                m.type = MsgType.Image
+                self.logger.debug(
+                    "[%s] Treat Telegram document %r as image due to tg_image_*.png rule.",
+                    message_id,
+                    message.document.file_name,
+                )
 
             m.put_telegram_file(message)
             # Chat and author related stuff

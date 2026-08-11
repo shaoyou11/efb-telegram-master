@@ -4,12 +4,12 @@ import io
 import json
 import logging
 import os
+import time
 from functools import wraps
 from typing import List, TYPE_CHECKING, Callable
 
 import telegram.constants
 import telegram.error
-from retrying import retry
 from telegram import Update, InputFile, User, File, ForumTopic
 from telegram.ext import CallbackContext, Filters, MessageHandler, Updater, Dispatcher
 
@@ -65,20 +65,37 @@ class TelegramBotManager(LocaleMixin):
         @classmethod
         def exception_filter(cls, exception: Exception):
             cls.logger.exception("Exception: %s while sending request to Telegram server.", exception)
-            return isinstance(exception, telegram.error.TimedOut)
+            return isinstance(exception, (telegram.error.TimedOut, telegram.error.RetryAfter))
 
         @classmethod
         def retry_on_timeout(cls, fn: Callable):
-            """Infinitely retry for timed-out exceptions."""
+            """Retry network timeouts and Telegram flood-control responses."""
             @wraps(fn)
             def retry_wrapper(*args, **kwargs):
-                # Access the instance to get the retry setting
                 if not cls.enable_retry:
                     return fn(*args, **kwargs)
                 cls.logger.debug("Trying to call %s with infinite retry.", fn)
-                retried_fn = retry(wait_exponential_multiplier=1e3, wait_exponential_max=180e3,
-                                   retry_on_exception=cls.exception_filter)(fn)
-                return retried_fn(*args, **kwargs)
+                timeout_backoff = 1.0
+                while True:
+                    try:
+                        return fn(*args, **kwargs)
+                    except telegram.error.RetryAfter as error:
+                        retry_after = max(1, int(getattr(error, "retry_after", 1)))
+                        cls.logger.warning(
+                            "Telegram flood control hit for %s, sleep %ss then retry.",
+                            fn,
+                            retry_after,
+                        )
+                        time.sleep(retry_after)
+                    except telegram.error.TimedOut as error:
+                        cls.logger.warning(
+                            "Telegram timeout for %s, sleep %.1fs then retry. (%s)",
+                            fn,
+                            timeout_backoff,
+                            error,
+                        )
+                        time.sleep(timeout_backoff)
+                        timeout_backoff = min(timeout_backoff * 2, 180.0)
             return retry_wrapper
 
         @classmethod
@@ -702,7 +719,14 @@ class TelegramBotManager(LocaleMixin):
         empty = True
         if isinstance(file, str):
             local_path = utils.coerce_local_path(file)
-            empty = os.stat(local_path).st_size == 0
+            requires_local_file = file.startswith("file://") or os.path.isabs(local_path)
+            if requires_local_file:
+                empty = not os.path.exists(local_path) or os.stat(local_path).st_size == 0
+            elif os.path.exists(local_path):
+                empty = os.stat(local_path).st_size == 0
+            else:
+                # Telegram file IDs and URLs are remote references, not local files.
+                empty = False
         elif hasattr(file, "seekable"):
             if file.seekable():
                 file.seek(0, 2)
