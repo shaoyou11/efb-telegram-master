@@ -1,5 +1,7 @@
 import re
+import sys
 from io import BytesIO
+from types import ModuleType
 
 from pytest import raises
 
@@ -45,8 +47,32 @@ def test_chat_id_str_conversion():
     ), "Converting channel-chat ID with group ID"
 
 
-def test_convert_tgs_to_gif():
+def test_convert_tgs_to_gif(monkeypatch):
+    export_calls = []
+
+    def fake_export(animation, gif_file, **kwargs):
+        export_calls.append((animation, gif_file, kwargs))
+        gif_file.write(b"GIF89a")
+
+    gif_exporter = ModuleType("lottie.exporters.gif")
+    gif_exporter.export_gif = fake_export
+    monkeypatch.setitem(sys.modules, "lottie.exporters.gif", gif_exporter)
     out = BytesIO()
     with open('tests/mocks/AnimatedSticker.tgs', 'rb') as f:
         assert convert_tgs_to_gif(f, out), "conversion outcome"
     assert out.seek(0, 2), "converted TGS file should not be empty"
+    assert len(export_calls) == 1
+    assert export_calls[0][1] is out
+    assert export_calls[0][2] == {"skip_frames": 5, "dpi": 48}
+
+
+def test_convert_tgs_to_gif_failure(monkeypatch):
+    def failed_export(*args, **kwargs):
+        raise RuntimeError("renderer unavailable")
+
+    gif_exporter = ModuleType("lottie.exporters.gif")
+    gif_exporter.export_gif = failed_export
+    monkeypatch.setitem(sys.modules, "lottie.exporters.gif", gif_exporter)
+    out = BytesIO()
+    with open('tests/mocks/AnimatedSticker.tgs', 'rb') as f:
+        assert not convert_tgs_to_gif(f, out)
