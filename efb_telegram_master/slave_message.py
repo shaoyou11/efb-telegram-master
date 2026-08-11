@@ -860,38 +860,67 @@ class SlaveMessageProcessor(LocaleMixin):
                     msg.file.seek(0)
                     # Fall through to send a new message
 
-            # Sending new message (either initially or as fallback from edit)
-            if send_as_file:
-                assert msg.path
-                file = self.process_file_obj(msg.file, msg.path)
-                return self.bot.send_document(tg_dest, file, prefix=text_prefix, suffix=reactions,
-                                              caption=text, parse_mode="HTML", filename=msg.filename,
-                                              message_thread_id=thread_id,
-                                              reply_markup=reply_markup,
-                                              disable_notification=silent,
-                                              **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
-            else:
-                try:
-                    assert msg.path
-                    file = self.process_file_obj(msg.file, msg.path)
-                    return self.bot.send_photo(tg_dest, file, prefix=text_prefix, suffix=reactions,
-                                               caption=text, parse_mode="HTML",
-                                               message_thread_id=thread_id,
-                                               reply_markup=reply_markup,
-                                               disable_notification=silent,
-                                               **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
-                except telegram.error.BadRequest as e:
-                    self.logger.error('[%s] Failed to send it as image, sending as document. Reason: %s',
-                                      msg.uid, e)
-                    assert msg.path
-                    msg.file.seek(0) # Rewind file pointer
-                    file = self.process_file_obj(msg.file, msg.path)
-                    return self.bot.send_document(tg_dest, file, prefix=text_prefix, suffix=reactions,
-                                                  caption=text, parse_mode="HTML", filename=msg.filename,
-                                                  message_thread_id=thread_id,
-                                                  reply_markup=reply_markup,
-                                                  disable_notification=silent,
-                                                  **self.build_reply_target_kwargs(target_msg_id, target_quote_text))
+            assert msg.path
+            media_type = "document" if send_as_file else "photo"
+            fingerprint, reusable_file_id = self.channel.image_perception.find(msg.path, media_type)
+
+            def remember(result: telegram.Message) -> telegram.Message:
+                photo = result.photo[-1] if getattr(result, "photo", None) else None
+                document = getattr(result, "document", None)
+                media = photo or document
+                actual_type = "photo" if photo else "document"
+                self.channel.image_perception.remember(
+                    fingerprint,
+                    actual_type,
+                    getattr(media, "file_id", None),
+                    getattr(media, "file_unique_id", None),
+                    msg.mime,
+                )
+                return result
+
+            def source_file():
+                msg.file.seek(0)
+                return self.process_file_obj(msg.file, msg.path)
+
+            def send_document(file_or_id):
+                return remember(self.bot.send_document(
+                    tg_dest, file_or_id, prefix=text_prefix, suffix=reactions,
+                    caption=text, parse_mode="HTML", filename=msg.filename,
+                    message_thread_id=thread_id, reply_markup=reply_markup,
+                    disable_notification=silent,
+                    **self.build_reply_target_kwargs(target_msg_id, target_quote_text),
+                ))
+
+            try:
+                if send_as_file:
+                    return send_document(reusable_file_id or source_file())
+                return remember(self.bot.send_photo(
+                    tg_dest, reusable_file_id or source_file(), prefix=text_prefix,
+                    suffix=reactions, caption=text, parse_mode="HTML",
+                    message_thread_id=thread_id, reply_markup=reply_markup,
+                    disable_notification=silent,
+                    **self.build_reply_target_kwargs(target_msg_id, target_quote_text),
+                ))
+            except telegram.error.BadRequest as error:
+                if reusable_file_id:
+                    self.logger.warning(
+                        "[%s] Cached Telegram image is unavailable; retrying normal upload: %s",
+                        msg.uid, error,
+                    )
+                    if send_as_file:
+                        return send_document(source_file())
+                    try:
+                        return remember(self.bot.send_photo(
+                            tg_dest, source_file(), prefix=text_prefix, suffix=reactions,
+                            caption=text, parse_mode="HTML", message_thread_id=thread_id,
+                            reply_markup=reply_markup, disable_notification=silent,
+                            **self.build_reply_target_kwargs(target_msg_id, target_quote_text),
+                        ))
+                    except telegram.error.BadRequest as retry_error:
+                        error = retry_error
+                self.logger.error('[%s] Failed to send it as image, sending as document. Reason: %s',
+                                  msg.uid, error)
+                return send_document(source_file())
         finally:
             if msg.file:
                 msg.file.close()

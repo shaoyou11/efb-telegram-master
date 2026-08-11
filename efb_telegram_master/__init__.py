@@ -49,6 +49,7 @@ from .operations_ui import OperationsUI
 from .delivery_telemetry import DeliveryGuard
 from .master_message import MasterMessageProcessor
 from .member_color_ui import MemberColorUI
+from .image_perception import ImagePerception, ImagePerceptionUI
 from .message import ETMMsg
 from .rpc_utils import RPCUtilities
 from .slave_message import SlaveMessageProcessor
@@ -151,6 +152,9 @@ class TelegramChannel(MasterChannel):
         self.bridge_queue_settings = BridgeQueueSettings(
             data_root / "operations" / "state" / "bridge-queue-settings.json"
         )
+        self.image_perception = ImagePerception(
+            self.db, data_root / "operations" / "state" / "image-perception.json"
+        )
         self.delivery_policy_ui = DeliveryPolicyUI(self)
         self.operations_ui = OperationsUI(self)
         self.slave_messages: SlaveMessageProcessor = SlaveMessageProcessor(self)
@@ -200,6 +204,7 @@ class TelegramChannel(MasterChannel):
         self.watchdog_control = WatchdogControl(self)
         self.wechat_control = WeChatControl(self)
         self.member_color_ui = MemberColorUI(self)
+        self.image_perception_ui = ImagePerceptionUI(self)
         self.author_name_spoiler_ui = AuthorNameSpoilerUI(self)
         self.bridge_dead_letter_guard = BridgeDeadLetterGuard(
             self,

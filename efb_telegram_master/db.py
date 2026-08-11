@@ -8,7 +8,7 @@ from contextlib import suppress
 from functools import partial
 from typing import List, Optional, Tuple, Dict, Collection, TYPE_CHECKING
 
-from peewee import Model, TextField, DateTimeField, CharField, DoesNotExist, fn, BlobField
+from peewee import Model, TextField, DateTimeField, CharField, DoesNotExist, fn, BlobField, IntegerField
 from playhouse.sqliteq import SqliteQueueDatabase
 from playhouse.migrate import SqliteMigrator, migrate
 from telegram import Message
@@ -176,6 +176,22 @@ class SlaveChatInfo(BaseModel):
     pickle = BlobField(null=True)
 
 
+class ImageFingerprint(BaseModel):
+    fingerprint = CharField(index=True)
+    tg_media_type = CharField(index=True)
+    tg_file_id = TextField()
+    tg_file_unique_id = TextField(null=True)
+    mime = TextField(null=True)
+    width = IntegerField(null=True)
+    height = IntegerField(null=True)
+    file_size = IntegerField(null=True)
+    created_at = DateTimeField(default=datetime.datetime.now)
+    last_used_at = DateTimeField(default=datetime.datetime.now, index=True)
+
+    class Meta:
+        indexes = ((('fingerprint', 'tg_media_type'), True),)
+
+
 class DatabaseManager:
     logger = logging.getLogger(__name__)
     FAIL_FLAG = '__fail__'
@@ -203,6 +219,9 @@ class DatabaseManager:
                 self._migrate(2)
             elif "file_unique_id" not in msg_log_columns:
                 self._migrate(3)
+        if not ImageFingerprint.table_exists():
+            database.create_tables([ImageFingerprint], safe=True)
+            self._wait_for_write_queue()
         self.logger.debug("Database migration finished...")
 
     def stop_worker(self):
@@ -213,8 +232,50 @@ class DatabaseManager:
         """
         Initializing tables.
         """
-        database.create_tables([ChatAssoc, MsgLog, SlaveChatInfo, TopicAssoc])
+        database.create_tables([ChatAssoc, MsgLog, SlaveChatInfo, TopicAssoc, ImageFingerprint])
         DatabaseManager._wait_for_write_queue()
+
+    @staticmethod
+    def image_fingerprint_candidates(tg_media_type: str, limit: int = 300):
+        return list(
+            ImageFingerprint.select().where(
+                ImageFingerprint.tg_media_type == tg_media_type
+            ).order_by(ImageFingerprint.last_used_at.desc()).limit(limit)
+        )
+
+    @staticmethod
+    def remember_image_fingerprint(fingerprint: str, tg_media_type: str,
+                                   tg_file_id: str, tg_file_unique_id: Optional[str],
+                                   mime: Optional[str], width: int, height: int,
+                                   file_size: int) -> None:
+        now = datetime.datetime.now()
+        (ImageFingerprint.insert(
+            fingerprint=fingerprint,
+            tg_media_type=tg_media_type,
+            tg_file_id=tg_file_id,
+            tg_file_unique_id=tg_file_unique_id,
+            mime=mime,
+            width=width,
+            height=height,
+            file_size=file_size,
+            created_at=now,
+            last_used_at=now,
+        ).on_conflict(
+            conflict_target=(ImageFingerprint.fingerprint, ImageFingerprint.tg_media_type),
+            update={
+                ImageFingerprint.tg_file_id: tg_file_id,
+                ImageFingerprint.tg_file_unique_id: tg_file_unique_id,
+                ImageFingerprint.mime: mime,
+                ImageFingerprint.width: width,
+                ImageFingerprint.height: height,
+                ImageFingerprint.file_size: file_size,
+                ImageFingerprint.last_used_at: now,
+            },
+        ).execute())
+
+    @staticmethod
+    def image_fingerprint_count() -> int:
+        return ImageFingerprint.select().count()
 
     @staticmethod
     def _wait_for_write_queue():

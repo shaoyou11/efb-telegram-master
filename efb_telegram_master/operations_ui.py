@@ -981,6 +981,8 @@ class OperationsUI:
         watchdog = self._watchdog_state()
         spoiler_store = getattr(self.channel, "author_name_spoiler_store", None)
         spoiler_enabled = bool(getattr(spoiler_store, "enabled", False))
+        image_perception = getattr(self.channel, "image_perception", None)
+        image_perception_text = image_perception.summary() if image_perception else "关闭"
         last_delivery = format_timestamp(
             delivery.get("last_delivered_at") or delivery.get("last_inbound_at")
         )
@@ -1043,6 +1045,7 @@ class OperationsUI:
             f"恢复配置：{recovery_config}\n"
             f"失败诊断：{diagnostic_retention}\n"
             f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
+            f"图片感知：{image_perception_text}\n"
             "\n【消息投递】\n"
             f"最近消息活动：{last_delivery}\n"
             f"队列最近延迟：{format_queue_latency(delivery)}\n"
