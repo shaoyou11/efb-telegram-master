@@ -122,6 +122,8 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
             "master_enabled": True,
             "event_enabled": True,
             "night_enabled": False,
+            "manual_login_protection": True,
+            "startup_grace_seconds": 90,
         }),
         finder_feed_status=lambda: {
             "waiting": 1,
@@ -154,6 +156,7 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     assert "最近登录：2026-08-08 03:30:00" in text
     assert "最近恢复动作：正常" in text
     assert "自动恢复：总开关开启｜全天开启｜凌晨关闭" in text
+    assert "登录保护：扫码保护开启｜启动保护1分30秒" in text
     assert "Bridge 队列：暂存 0｜待投递 0｜处理中 0｜总计 0｜死信 1" in text
     assert "投递审计：正常" in text
     assert "数据库审计：正常" in text
@@ -196,6 +199,8 @@ def test_health_action_is_localized():
     assert format_health_action("healthy") == "正常"
     assert format_health_action("recovered:efb") == "已恢复（EFB）"
     assert format_health_action("restart_failed:full") == "恢复失败（全部服务）"
+    assert format_health_action("hold_cooldown") == "等待 ComWechat 内部恢复（冷却中）"
+    assert format_health_action("comwechat_recovery_requested") == "已请求 ComWechat 容器内恢复"
 
 
 def test_status_falls_back_to_persistent_delivery_queues(tmp_path, monkeypatch):
