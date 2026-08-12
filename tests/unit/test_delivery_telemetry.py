@@ -42,6 +42,19 @@ def test_legacy_delivery_state_gets_latency_field(tmp_path):
     assert telemetry.state["last_latency_ms"] is None
 
 
+def test_delivery_telemetry_clears_pending_from_previous_process(tmp_path):
+    path = tmp_path / "delivery.json"
+    path.write_text(json.dumps({
+        "pending": {"uid": "stale-message", "type": "Image", "at": 100.0},
+        "last_inbound_at": 100.0,
+    }), encoding="utf-8")
+
+    telemetry = DeliveryTelemetry(path)
+
+    assert telemetry.state["pending"] is None
+    assert json.loads(path.read_text(encoding="utf-8"))["pending"] is None
+
+
 def test_delivery_telemetry_persists_24_hour_aggregate_stats(tmp_path, monkeypatch):
     path = tmp_path / "delivery.json"
     telemetry = DeliveryTelemetry(path)
