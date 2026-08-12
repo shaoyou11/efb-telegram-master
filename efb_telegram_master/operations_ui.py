@@ -371,6 +371,9 @@ def format_health_action(value) -> str:
         "wait": "等待复检",
         "cooldown": "冷却中",
         "hold": "等待 ComWechat 内部恢复",
+        "hold_cooldown": "等待 ComWechat 内部恢复（冷却中）",
+        "comwechat_recovery_requested": "已请求 ComWechat 容器内恢复",
+        "comwechat_recovery_request_failed": "ComWechat 容器内恢复请求失败",
         "restart": "正在准备恢复",
     }
     if text in labels:
@@ -1016,11 +1019,18 @@ class OperationsUI:
                 f"冷却{_duration_text(watchdog.get('click_cooldown_seconds', 120))}｜"
                 f"连续失败{watchdog.get('max_recovery_failures', 3)}次暂停"
             )
+            login_protection = (
+                "扫码保护"
+                + ("开启" if watchdog.get("manual_login_protection") else "关闭")
+                + "｜启动保护"
+                + _duration_text(watchdog.get("startup_grace_seconds", 90))
+            )
             diagnostic_retention = watchdog.get("diagnostic_retention", "仅保留最新一张")
         else:
             recovery_text = "等待检查"
             recovery_window = "等待检查"
             recovery_config = "等待检查"
+            login_protection = "等待检查"
             diagnostic_retention = "等待检查"
         reconcile_note = (
             "投递对账：已过期，当前数字按实时队列\n"
@@ -1043,6 +1053,7 @@ class OperationsUI:
             f"自动恢复：{recovery_text}\n"
             f"恢复时段：{recovery_window}\n"
             f"恢复配置：{recovery_config}\n"
+            f"登录保护：{login_protection}\n"
             f"失败诊断：{diagnostic_retention}\n"
             f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
             f"图片感知：{image_perception_text}\n"
