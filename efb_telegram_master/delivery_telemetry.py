@@ -42,6 +42,9 @@ class DeliveryTelemetry:
         self.stats_path = Path(stats_path) if stats_path else self.path.with_name("delivery-stats.json")
         self.lock = threading.Lock()
         self.state = self._load()
+        if self.state.get("pending") is not None:
+            self.state["pending"] = None
+            self._save()
         self.stats = self._load_stats()
 
     def _load(self):
