@@ -14,7 +14,7 @@ from telegram.ext import CallbackContext
 from ehforwarderbot import coordinator
 
 from .bridge_queue_ui import BridgeQueueUI
-from .delivery_telemetry import delivery_stats_summary
+from .delivery_telemetry import delivery_stats_summary, delivery_trace_summary
 from .failed_media import cleanup_failed_media
 
 
@@ -24,6 +24,76 @@ URL = re.compile(r"https?://[^\s]+")
 DELIVERY_PAGE_SIZE = 5
 RECONCILE_MAX_AGE_SECONDS = 3 * 60 * 60
 SHANGHAI_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+
+
+def format_trace_report(bridge_records: list, telegram_records: list, trace_filter: str = "") -> str:
+    bridge_stages = {
+        "staged": "已暂存", "pending": "等待投递", "inflight": "投递中",
+        "acked": "已确认", "dead": "死信", "discarded": "已丢弃",
+    }
+    telegram_stages = {
+        "received": "已接收", "delivered": "已投递",
+        "filtered": "已过滤", "failed": "失败",
+    }
+    merged = {}
+    wanted = str(trace_filter or "").strip().lower()
+    for record in bridge_records or []:
+        trace_id = str(record.get("trace_id") or "").lower()
+        if not trace_id or (wanted and not trace_id.startswith(wanted)):
+            continue
+        merged.setdefault(trace_id, {})["bridge"] = record
+    for record in telegram_records or []:
+        trace_id = str(record.get("trace_id") or "").lower()
+        if not trace_id or (wanted and not trace_id.startswith(wanted)):
+            continue
+        merged.setdefault(trace_id, {})["telegram"] = record
+    if not merged:
+        return "EFB 投递追踪\n\n当前没有匹配的最近记录。"
+    ordered = sorted(
+        merged.items(),
+        key=lambda item: max(
+            float(item[1].get("bridge", {}).get("received_at") or 0),
+            float(item[1].get("telegram", {}).get("at") or 0),
+        ),
+        reverse=True,
+    )[:10]
+    lines = ["EFB 投递追踪", "", "仅显示脱敏编号、阶段、类型和时间。", ""]
+    for trace_id, stages in ordered:
+        bridge = stages.get("bridge", {})
+        telegram = stages.get("telegram", {})
+        bridge_text = bridge_stages.get(bridge.get("state"), str(bridge.get("state") or "暂无"))
+        telegram_text = telegram_stages.get(telegram.get("stage"), str(telegram.get("stage") or "暂无"))
+        message_type = str(telegram.get("type") or "未知")
+        lines.append(
+            f"{trace_id} · {message_type}\n"
+            f"Bridge {bridge_text} · Telegram {telegram_text}"
+        )
+    return "\n\n".join(lines)
+
+
+def format_issues_report(logged_in: bool, queue: dict, bridge: dict,
+                         audits: dict, mapping_ok: bool) -> str:
+    issues = []
+    if not logged_in:
+        issues.append("- 微信未登录")
+    pending = int(queue.get("pending", 0) or 0)
+    failed = int(queue.get("failed", 0) or 0)
+    dead = int(bridge.get("dead_letter_size", 0) or 0)
+    if pending:
+        issues.append(f"- 投递队列：待处理 {pending} 条")
+    if failed:
+        issues.append(f"- 投递队列：失败 {failed} 条")
+    if dead:
+        issues.append(f"- Bridge 死信 {dead} 条")
+    for name, report in audits.items():
+        if report and report.get("healthy") is False:
+            reason = redact_error(report.get("reason") or "检查异常")
+            issues.append(f"- {name}：{reason}")
+    if not mapping_ok:
+        issues.append("- 映射数据库异常")
+    if not issues:
+        issues.append("当前没有发现需要处理的异常。")
+    return "EFB 异常中心\n\n" + "\n".join(issues)
 
 
 def redact_error(value: str) -> str:
@@ -259,6 +329,7 @@ def format_delivery_stats(stats: dict) -> str:
         f"微信接收 {int(stats.get('inbound', 0) or 0)}｜"
         f"Telegram成功 {int(stats.get('delivered', 0) or 0)}｜"
         f"过滤 {int(stats.get('filtered', 0) or 0)}｜"
+        f"静默 {int(stats.get('silent', 0) or 0)}｜"
         f"失败 {int(stats.get('failed', 0) or 0)}｜"
         f"平均延迟 {average_text}"
     )
@@ -1122,20 +1193,27 @@ class OperationsUI:
         if not self._allowed(update):
             return
         state_root = self.data_root / "operations" / "state"
-        health = load_json(state_root / "health-guard.json")
         reconcile = load_json(self.data_root / "delivery-reconcile-latest.json")
         queue = delivery_summary(self.data_root, reconcile)
-        watchdog = self._watchdog_state()
+        try:
+            bridge = self.bridge_queue_ui.client.health()
+        except Exception:
+            bridge = {"dead_letter_size": 0}
+        database_audit = load_json(self.data_root / "database-audit-latest.json")
+        audits = {
+            "投递审计": reconcile,
+            "数据库审计": database_audit,
+            "容量审计": load_json(self.data_root / "capacity-audit-latest.json"),
+            "备份校验": load_json(self.data_root / "backup-audit-latest.json"),
+        }
+        mapping_ok = bool(database_audit.get("healthy"))
+        try:
+            logged_in = self._wechat_login() == "已登录"
+        except Exception:
+            logged_in = False
         self._send(
             update,
-            "EFB 异常中心\n\n"
-            f"微信：{self._wechat_login()}\n"
-            f"服务健康：{'正常' if health.get('healthy') else health.get('reason', '未检查')}\n"
-            f"最近守护动作：{health.get('action', '暂无')}\n"
-            f"自动恢复：{('总开关开启' if watchdog.get('master_enabled') else '总开关关闭') if watchdog else '等待检查'}\n"
-            f"待处理投递：{queue['pending']} 条\n"
-            f"失败投递：{queue['failed']} 条\n"
-            "详情请查看日志或 Bridge 队列。",
+            format_issues_report(logged_in, queue, bridge, audits, mapping_ok),
             "errors",
         )
 
@@ -1152,6 +1230,23 @@ class OperationsUI:
 
     def status(self, update: Update, context: CallbackContext):
         self.health(update, context)
+
+    def trace(self, update: Update, context: CallbackContext):
+        if not self._allowed(update):
+            return
+        bridge_records = []
+        try:
+            bridge_records = self.bridge_queue_ui.client.trace(30)
+        except Exception:
+            pass
+        trace_filter = context.args[0] if getattr(context, "args", None) else ""
+        telegram_records = delivery_trace_summary(self.data_root / "operations" / "state")
+        self._send(
+            update,
+            format_trace_report(bridge_records, telegram_records, trace_filter),
+            "trace",
+            include_bridge=True,
+        )
 
     def restart_all(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):
@@ -1263,6 +1358,7 @@ class OperationsUI:
             "delivery": self.delivery_detail,
             "errors": self.errors,
             "diagnostic": self.diagnostic,
+            "trace": self.trace,
             "backup": self.backup_info,
             "filetest": self.filetest,
             "security": self.security,

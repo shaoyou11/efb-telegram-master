@@ -92,6 +92,21 @@ def test_client_builds_paginated_and_batch_requests(monkeypatch):
     assert calls[1][0].endswith("/v1/messages/retry-all-active")
 
 
+def test_client_reads_sanitized_trace(monkeypatch):
+    monkeypatch.setattr(
+        bridge_queue.request,
+        "urlopen",
+        lambda req, timeout: FakeResponse({
+            "ok": True,
+            "messages": [{"trace_id": "abcdef123456", "state": "acked"}],
+        }),
+    )
+
+    assert BridgeQueueClient("http://comwechat:19088").trace(5) == [
+        {"trace_id": "abcdef123456", "state": "acked"}
+    ]
+
+
 def test_client_redacts_endpoint_and_token_from_errors(monkeypatch):
     def fake_urlopen(_req, timeout):
         raise RuntimeError(

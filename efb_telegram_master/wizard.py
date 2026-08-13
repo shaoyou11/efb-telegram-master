@@ -306,6 +306,8 @@ def setup_telegram_bot_commands_list(data):
         Bot(data.data['token'], request=data.request).set_my_commands(
             [
                 ("status", _("Show comprehensive EFB operational status.")),
+                ("issues", _("Show actionable EFB issues only.")),
+                ("trace", _("Show recent end-to-end delivery traces.")),
                 ("bridge", "管理 Bridge 投递队列。"),
                 ("watchdog", _("Manage WeChat automatic recovery.")),
                 ("wechat", _("Manage WeChat login and recovery.")),

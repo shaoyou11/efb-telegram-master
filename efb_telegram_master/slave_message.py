@@ -68,6 +68,13 @@ class SlaveMessageProcessor(LocaleMixin):
     DELIVERY_ERROR_KEY = "telegram_delivery_error"
     DELIVERY_RETRY_COUNT = 3
 
+    @staticmethod
+    def delivery_trace_id(msg: Message) -> str:
+        vendor_specific = getattr(msg, "vendor_specific", {})
+        if isinstance(vendor_specific, dict):
+            return str(vendor_specific.get("bridge_trace_id") or "")[:12]
+        return ""
+
     def __init__(self, channel: 'TelegramChannel'):
         self.channel: 'TelegramChannel' = channel
         self.bot: 'TelegramBotManager' = self.channel.bot_manager
@@ -212,7 +219,8 @@ class SlaveMessageProcessor(LocaleMixin):
                 size = os.path.getsize(msg.path)
             except OSError:
                 pass
-        self.telemetry.inbound(str(msg.uid), str(msg.type), size)
+        trace_id = self.delivery_trace_id(msg)
+        self.telemetry.inbound(str(msg.uid), str(msg.type), size, trace_id)
         try:
             xid = msg.uid
             self.logger.debug("[%s] Slave message delivered to ETM.\n%s", xid, msg)
@@ -220,7 +228,7 @@ class SlaveMessageProcessor(LocaleMixin):
             policy = self.delivery_policy(msg)
             if policy is DeliveryPolicy.FILTERED:
                 self.logger.debug("[%s] Message is not delivered per chat delivery policy.", xid)
-                self.telemetry.filtered(str(msg.uid))
+                self.telemetry.filtered(str(msg.uid), trace_id)
                 self.mark_delivery(msg, "filtered")
                 return msg
 
@@ -231,7 +239,7 @@ class SlaveMessageProcessor(LocaleMixin):
                 )
                 if existing:
                     self.logger.info("[%s] 文件已经发送，跳过重复投递。", xid)
-                    self.telemetry.delivered(str(msg.uid))
+                    self.telemetry.delivered(str(msg.uid), trace_id)
                     self.mark_delivery(msg, "delivered")
                     return msg
 
@@ -240,7 +248,7 @@ class SlaveMessageProcessor(LocaleMixin):
             silent = self.is_silent(msg)
             if silent is None:
                 self.logger.debug("[%s] Message is not delivered per silent settings.", xid)
-                self.telemetry.filtered(str(msg.uid))
+                self.telemetry.filtered(str(msg.uid), trace_id)
                 self.mark_delivery(msg, "skipped")
                 return msg
             if policy is DeliveryPolicy.SILENT:
@@ -248,7 +256,7 @@ class SlaveMessageProcessor(LocaleMixin):
 
             if tg_dest is None:
                 self.logger.debug("[%s] Sender of the message is muted.", xid)
-                self.telemetry.filtered(str(msg.uid))
+                self.telemetry.filtered(str(msg.uid), trace_id)
                 self.mark_delivery(msg, "skipped")
                 return msg
 
@@ -276,10 +284,10 @@ class SlaveMessageProcessor(LocaleMixin):
                 thread_id=thread_id,
                 silent=silent,
             )
-            self.telemetry.delivered(str(msg.uid))
+            self.telemetry.delivered(str(msg.uid), trace_id, silent=bool(silent))
             self.mark_delivery(msg, "delivered")
         except Exception as e:
-            self.telemetry.failed(str(msg.uid), repr(e))
+            self.telemetry.failed(str(msg.uid), repr(e), trace_id)
             self.mark_delivery(msg, "failed", repr(e))
             self.logger.error("Error occurred while processing message from slave channel.\nMessage: %s\n%s\n%s",
                               repr(msg), repr(e), traceback.format_exc())

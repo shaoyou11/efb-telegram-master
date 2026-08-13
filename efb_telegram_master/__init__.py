@@ -46,7 +46,7 @@ from .db import DatabaseManager
 from .delivery_policy import DeliveryPolicyStore
 from .delivery_policy_ui import DeliveryPolicyUI
 from .operations_ui import OperationsUI
-from .delivery_telemetry import DeliveryGuard
+from .delivery_telemetry import DeliveryGuard, DigestGuard, delivery_stats_summary
 from .master_message import MasterMessageProcessor
 from .member_color_ui import MemberColorUI
 from .image_perception import ImagePerception, ImagePerceptionUI
@@ -160,6 +160,16 @@ class TelegramChannel(MasterChannel):
         self.slave_messages: SlaveMessageProcessor = SlaveMessageProcessor(self)
         self.delivery_guard = DeliveryGuard(self.slave_messages.telemetry, self)
         self.delivery_guard.start()
+        digest_state = Path(os.getenv(
+            "EFB_DIGEST_STATE", str(data_root / "operations" / "state" / "digest.json")
+        ))
+        self.digest_guard = DigestGuard(
+            self,
+            digest_state,
+            lambda: delivery_stats_summary(data_root / "operations" / "state"),
+            int(os.getenv("EFB_DIGEST_INTERVAL_SECONDS", "3600")),
+        )
+        self.digest_guard.start()
         self.topic_group: Optional[TelegramChatID] = TelegramChatID(self.flag('topic_group'))
 
         if not self.flag('auto_locale'):
@@ -186,7 +196,9 @@ class TelegramChannel(MasterChannel):
         for command, handler in (
                 ("status", self.operations_ui.status),
                 ("health", self.operations_ui.health),
+                ("issues", self.operations_ui.errors),
                 ("bridge", self.operations_ui.bridge),
+                ("trace", self.operations_ui.trace),
                 ("version", self.operations_ui.version),
                 ("backup_info", self.operations_ui.backup_info),
                 ("filetest", self.operations_ui.filetest),

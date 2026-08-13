@@ -108,6 +108,13 @@ class BridgeQueueClient:
     def health(self) -> Dict[str, Any]:
         return self._request("/healthz")
 
+    def trace(self, limit: int = 20) -> List[Dict[str, Any]]:
+        result = self._request(
+            f"/v1/messages/trace?limit={min(100, max(1, int(limit)))}"
+        )
+        messages = result.get("messages", [])
+        return messages if isinstance(messages, list) else []
+
     def active(self, limit: int = 10) -> List[Dict[str, Any]]:
         messages, _ = self.active_page(limit)
         return messages
