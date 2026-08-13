@@ -16,6 +16,7 @@ from telegram.ext import CallbackContext, Filters, MessageHandler, Updater, Disp
 from . import utils
 from .locale_handler import LocaleHandler
 from .locale_mixin import LocaleMixin
+from .rate_limiter import TelegramRateLimiter
 
 if TYPE_CHECKING:
     from . import TelegramChannel
@@ -148,6 +149,7 @@ class TelegramBotManager(LocaleMixin):
                     msg = fn(self, *args, **kwargs)
                     chat_id = kwargs.get("chat_id", args[0] if len(args) > 0 else "")
                     filename = "%s_%s.txt" % (chat_id, msg.message_id)
+                    self.rate_limiter.wait()
                     self.updater.bot.send_document(chat_id, full_message,
                                                    filename=filename,
                                                    reply_to_message_id=msg.message_id,
@@ -249,6 +251,10 @@ class TelegramBotManager(LocaleMixin):
             MessageHandler(whitelist_filter, lambda update, context: ...))
         self.dispatcher.add_handler(LocaleHandler(channel))
         self.Decorators.enable_retry = channel.flag('retry_on_error')
+        self.rate_limiter = TelegramRateLimiter(
+            os.getenv("EFB_TELEGRAM_RATE_PER_SECOND", "4"),
+            os.getenv("EFB_TELEGRAM_BURST", "4"),
+        )
         self.logger.debug("Base dispatchers added...")
 
     @Decorators.retry_on_timeout
@@ -290,6 +296,7 @@ class TelegramBotManager(LocaleMixin):
                 filename += ".html"
             else:
                 filename += ".txt"
+            self.rate_limiter.wait()
             self.updater.bot.send_document(args[0], full_message, filename=filename,
                                            reply_to_message_id=msg.message_id,
                                            caption=self._("Message is truncated due to its length. "
@@ -329,6 +336,7 @@ class TelegramBotManager(LocaleMixin):
                 filename += ".html"
             else:
                 filename += ".txt"
+            self.rate_limiter.wait()
             self.updater.bot.send_document(kwargs['chat_id'], full_message,
                                            filename=filename,
                                            reply_to_message_id=msg.message_id,
@@ -347,10 +355,12 @@ class TelegramBotManager(LocaleMixin):
             telegram.Message: The message sent
         """
         try:
+            self.rate_limiter.wait()
             return self.updater.bot.send_message(*args, **kwargs)
         except telegram.error.BadRequest as e:
             if e.message.lower().startswith("can't parse entities") and 'parse_mode' in kwargs:
                 kwargs.pop("parse_mode")
+                self.rate_limiter.wait()
                 return self.updater.bot.send_message(*args, **kwargs)
             else:
                 raise e
@@ -367,9 +377,11 @@ class TelegramBotManager(LocaleMixin):
         except telegram.error.BadRequest as e:
             if e.message == "Message can't be edited":
                 kwargs['reply_to_message_id'] = kwargs.pop('message_id')
+                self.rate_limiter.wait()
                 return self.updater.bot.send_message(*args, **kwargs)
             elif e.message == "message to edit not found":
                 kwargs.pop('message_id')
+                self.rate_limiter.wait()
                 return self.updater.bot.send_message(*args, **kwargs)
             elif e.message.lower().startswith("can't parse entities") and 'parse_mode' in kwargs:
                 kwargs.pop("parse_mode")
@@ -400,8 +412,10 @@ class TelegramBotManager(LocaleMixin):
         """
         kwargs = self._normalize_media_kwargs(kwargs)
         try:
+            self.rate_limiter.wait()
             return self.updater.bot.send_audio(*args, **kwargs)
         except telegram.error.BadRequest:
+            self.rate_limiter.wait()
             return self.updater.bot.send_document(*args, **kwargs)
 
     @Decorators.retry_on_timeout
@@ -427,8 +441,10 @@ class TelegramBotManager(LocaleMixin):
         """
         kwargs = self._normalize_media_kwargs(kwargs)
         try:
+            self.rate_limiter.wait()
             return self.updater.bot.send_voice(*args, **kwargs)
         except telegram.error.BadRequest:
+            self.rate_limiter.wait()
             return self.updater.bot.send_document(*args, **kwargs)
 
     @Decorators.retry_on_timeout
@@ -454,8 +470,10 @@ class TelegramBotManager(LocaleMixin):
         """
         kwargs = self._normalize_media_kwargs(kwargs)
         try:
+            self.rate_limiter.wait()
             return self.updater.bot.send_video(*args, **kwargs)
         except telegram.error.BadRequest:
+            self.rate_limiter.wait()
             return self.updater.bot.send_document(*args, **kwargs)
 
     @Decorators.retry_on_timeout
@@ -478,6 +496,7 @@ class TelegramBotManager(LocaleMixin):
             telegram.Message
         """
         kwargs = self._normalize_media_kwargs(kwargs)
+        self.rate_limiter.wait()
         return self.updater.bot.send_document(*args, **kwargs)
 
     @Decorators.retry_on_timeout
@@ -500,6 +519,7 @@ class TelegramBotManager(LocaleMixin):
             telegram.Message
         """
         kwargs = self._normalize_media_kwargs(kwargs)
+        self.rate_limiter.wait()
         return self.updater.bot.send_animation(*args, **kwargs)
 
     @Decorators.retry_on_timeout
@@ -523,8 +543,10 @@ class TelegramBotManager(LocaleMixin):
         """
         kwargs = self._normalize_media_kwargs(kwargs)
         try:
+            self.rate_limiter.wait()
             return self.updater.bot.send_photo(*args, **kwargs)
         except telegram.error.BadRequest:
+            self.rate_limiter.wait()
             return self.updater.bot.send_document(*args, **kwargs)
 
     @Decorators.retry_on_timeout
@@ -548,18 +570,21 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
     def send_location(self, *args, **kwargs):
+        self.rate_limiter.wait()
         return self.updater.bot.send_location(*args, **kwargs)
 
     @Decorators.retry_on_timeout
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
     def send_venue(self, *args, **kwargs):
+        self.rate_limiter.wait()
         return self.updater.bot.send_venue(*args, **kwargs)
 
     @Decorators.retry_on_timeout
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
     def send_sticker(self, *args, **kwargs):
+        self.rate_limiter.wait()
         return self.updater.bot.send_sticker(*args, **kwargs)
 
     @Decorators.retry_on_timeout
@@ -645,6 +670,7 @@ class TelegramBotManager(LocaleMixin):
             truncated = full_message[:keep_size] + "…" + full_message[keep_size:]
             result = self.updater.bot.answer_callback_query(*args, text=truncated, **kwargs)
             filename = f"{chat_id}_{message_id}.txt"
+            self.rate_limiter.wait()
             self.updater.bot.send_document(args[0], full_message_buffer, filename,
                                            reply_to_message_id=message_id,
                                            caption=self._("Response is truncated due to its length. "

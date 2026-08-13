@@ -20,6 +20,8 @@ from . import utils
 LOGGER = logging.getLogger(__name__)
 PRIVATE_COMMANDS = (
     ("status", "查看 EFB 综合运行状态。"),
+    ("issues", "只查看当前需要处理的异常。"),
+    ("trace", "查看最近端到端投递轨迹。"),
     ("bridge", "管理 Bridge 投递队列。"),
     ("watchdog", "管理微信自动恢复开关。"),
     ("wechat", "管理微信登录与自动恢复。"),

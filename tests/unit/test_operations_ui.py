@@ -13,6 +13,8 @@ from efb_telegram_master.operations_ui import (
     format_delivery_stats,
     format_health_action,
     format_manual_restart,
+    format_trace_report,
+    format_issues_report,
     format_audit_status,
     format_timestamp,
     format_uptime,
@@ -31,6 +33,34 @@ def test_load_json_rejects_invalid_content(tmp_path):
 
 def test_format_timestamp_handles_missing_value():
     assert format_timestamp(None) == "暂无"
+
+
+def test_format_trace_report_joins_bridge_and_telegram_without_content():
+    text = format_trace_report(
+        [{"trace_id": "abcdef123456", "state": "acked", "attempts": 1}],
+        [{"trace_id": "abcdef123456", "stage": "delivered", "at": 1000, "type": "Image"}],
+    )
+
+    assert "abcdef123456" in text
+    assert "Bridge 已确认" in text
+    assert "Telegram 已投递" in text
+    assert "消息正文" not in text
+
+
+def test_issues_report_only_lists_actionable_failures():
+    text = format_issues_report(
+        logged_in=False,
+        queue={"pending": 2, "failed": 1},
+        bridge={"dead_letter_size": 3},
+        audits={"数据库": {"healthy": True}, "容量": {"healthy": False, "reason": "low disk"}},
+        mapping_ok=False,
+    )
+    assert "微信未登录" in text
+    assert "待处理 2" in text
+    assert "Bridge 死信 3" in text
+    assert "容量" in text
+    assert "- 数据库：" not in text
+    assert "映射数据库异常" in text
 
 
 def test_format_uptime_formats_process_runtime():
@@ -331,7 +361,7 @@ def test_delivery_stats_format_is_content_free():
         "filtered": 0,
         "failed": 1,
         "average_latency_ms": 850,
-    }) == "微信接收 2｜Telegram成功 1｜过滤 0｜失败 1｜平均延迟 850 毫秒"
+    }) == "微信接收 2｜Telegram成功 1｜过滤 0｜静默 0｜失败 1｜平均延迟 850 毫秒"
 
 
 def test_backup_verification_format_reports_read_only_checks():
