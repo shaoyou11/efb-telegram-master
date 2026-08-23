@@ -128,6 +128,94 @@ def test_status_text_shows_platform_sync_backup_and_queue_health(tmp_path, monke
     assert "备份校验：正常" in text
 
 
+def test_status_text_restores_runtime_events_and_maintenance_fields(tmp_path, monkeypatch):
+    state = tmp_path / "operations/state"
+    state.mkdir(parents=True)
+    (tmp_path / "backups").mkdir()
+    (state / "image-metadata.json").write_text(json.dumps({
+        "build_time": "2026-08-23T01:02:03Z",
+        "latest_match": True,
+    }), encoding="utf-8")
+    (tmp_path / "profiles/comwechat/honus.comwechat").mkdir(parents=True)
+    (tmp_path / "profiles/comwechat/honus.comwechat/session-events.json").write_text(json.dumps({
+        "last_logout_at": 1900,
+        "last_login_at": 1950,
+    }), encoding="utf-8")
+    (state / "maintenance.json").write_text(json.dumps({
+        "enabled": False,
+        "status": "idle",
+    }), encoding="utf-8")
+    (state / "manual-restart.json").write_text(json.dumps({
+        "status": "idle",
+    }), encoding="utf-8")
+
+    ui = OperationsUI.__new__(OperationsUI)
+    ui.data_root = Path(tmp_path)
+    ui.started_at = 1000
+    ui.channel = SimpleNamespace()
+    monkeypatch.setenv("EFB_IMAGE_REVISION", "test-revision")
+    monkeypatch.setattr(ui, "_wechat_login", lambda: "已登录")
+    monkeypatch.setattr(ui, "_bot_api", lambda: "正常")
+    monkeypatch.setattr(ui, "_bridge_health", lambda: {})
+    monkeypatch.setattr("efb_telegram_master.operations_ui.time.time", lambda: 2000)
+
+    text = ui.health_text()
+
+    assert "运行版本：" in text
+    assert "最近退出时间：" in text
+    assert "最近登录时间：" in text
+    assert "维护模式：" in text
+    assert "手动重启：" in text
+
+
+def test_status_markup_restores_full_operations_menu():
+    markup = OperationsUI.markup(
+        "status",
+        actions=(
+            ("投递明细", "delivery"),
+            ("异常中心", "issues"),
+            ("失败诊断", "diagnostic"),
+        ),
+        include_bridge=True,
+    )
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "Bridge 队列" in labels
+    assert "全部重启" in labels
+    assert "关闭并删除" in labels
+    assert "ops:bridge" in callbacks
+    assert "ops:restart-all" in callbacks
+    assert "ops:status-close" in callbacks
+
+
+def test_delivery_overview_and_list_markup_restore_two_step_actions():
+    overview = OperationsUI.delivery_overview_markup(1, 2)
+    overview_callbacks = [
+        button.callback_data
+        for row in overview.inline_keyboard
+        for button in row
+    ]
+    assert "ops:delivery:list:pending:0" in overview_callbacks
+    assert "ops:delivery:list:failed:0" in overview_callbacks
+
+    records = [("failed-token", {"filename": "photo.jpg", "created_at": 1900})]
+    listing = OperationsUI.delivery_list_markup("failed", records, 0)
+    listing_labels = [button.text for row in listing.inline_keyboard for button in row]
+    listing_callbacks = [
+        button.callback_data
+        for row in listing.inline_keyboard
+        for button in row
+    ]
+    identity = OperationsUI._delivery_key("failed", "failed-token")
+    assert "查看 1" in listing_labels
+    assert "重新投递" in listing_labels
+    assert "删除" in listing_labels
+    assert f"ops:delivery:view:failed:{identity}" in listing_callbacks
+    assert f"ops:delivery:retry:{identity}" in listing_callbacks
+    assert f"ops:delivery:delete:failed:{identity}" in listing_callbacks
+
+
 def test_status_falls_back_to_persistent_delivery_queues(tmp_path, monkeypatch):
     state = tmp_path / "operations/state"
     state.mkdir(parents=True)
