@@ -36,6 +36,9 @@ def recovery_action(state: dict, logged_in: bool, now: float, last_restart_at: f
 
 
 class DeliveryTelemetry:
+    STATS_WINDOW_SECONDS = 24 * 60 * 60
+    MAX_STATS_EVENTS = 4096
+
     def __init__(self, path: Path):
         self.path = Path(path)
         self.lock = threading.Lock()
@@ -62,9 +65,63 @@ class DeliveryTelemetry:
             temporary = handle.name
         os.replace(temporary, self.path)
 
+    @staticmethod
+    def _event_time(item):
+        if not isinstance(item, dict):
+            return None
+        try:
+            return float(item.get("at"))
+        except (TypeError, ValueError):
+            return None
+
+    def _record_stat(self, kind, at=None, delay_ms=None):
+        now = time.time() if at is None else float(at)
+        events = self.state.setdefault("stats", [])
+        if not isinstance(events, list):
+            events = []
+        cutoff = now - self.STATS_WINDOW_SECONDS
+        events = [
+            item for item in events
+            for event_time in (self._event_time(item),)
+            if event_time is not None and event_time >= cutoff
+        ]
+        event = {"at": now, "kind": str(kind)}
+        if delay_ms is not None:
+            event["delay_ms"] = max(0, int(delay_ms))
+        events.append(event)
+        self.state["stats"] = events[-self.MAX_STATS_EVENTS:]
+
+    def stats_snapshot(self, now=None):
+        now = time.time() if now is None else float(now)
+        with self.lock:
+            events = self.state.get("stats", [])
+            if not isinstance(events, list):
+                events = []
+            cutoff = now - self.STATS_WINDOW_SECONDS
+            recent = [
+                item for item in events
+                for event_time in (self._event_time(item),)
+                if event_time is not None and event_time >= cutoff
+            ]
+            delays = [
+                max(0, int(item["delay_ms"]))
+                for item in recent
+                if item.get("delay_ms") is not None
+                and str(item.get("delay_ms")).lstrip("-").isdigit()
+            ]
+            counts = {"received": 0, "delivered": 0, "filtered": 0, "failed": 0}
+            for item in recent:
+                kind = item.get("kind")
+                if kind in counts:
+                    counts[kind] += 1
+            counts["average_delay_ms"] = int(sum(delays) / len(delays)) if delays else 0
+            counts["window_seconds"] = self.STATS_WINDOW_SECONDS
+            return counts
+
     def inbound(self, uid: str, message_type: str, size: int = 0):
         with self.lock:
             now = time.time()
+            self._record_stat("received", now)
             self.state["last_inbound_at"] = now
             self.state["pending"] = {"uid": str(uid), "type": str(message_type),
                                      "size": int(size), "at": now}
@@ -72,7 +129,13 @@ class DeliveryTelemetry:
 
     def delivered(self, uid: str):
         with self.lock:
-            self.state["last_delivered_at"] = time.time()
+            delivered_at = time.time()
+            self.state["last_delivered_at"] = delivered_at
+            pending = self.state.get("pending") or {}
+            delay_ms = None
+            if str(pending.get("uid") or "") == str(uid) and isinstance(pending.get("at"), (int, float)):
+                delay_ms = (delivered_at - pending["at"]) * 1000
+            self._record_stat("delivered", delivered_at, delay_ms)
             if (self.state.get("pending") or {}).get("uid") == str(uid):
                 self.state["pending"] = None
             self.state["last_failure"] = None
@@ -81,14 +144,17 @@ class DeliveryTelemetry:
     def filtered(self, uid: str):
         with self.lock:
             self.state["last_filtered_at"] = time.time()
+            self._record_stat("filtered", self.state["last_filtered_at"])
             if (self.state.get("pending") or {}).get("uid") == str(uid):
                 self.state["pending"] = None
             self._save()
 
     def failed(self, uid: str, reason: str):
         with self.lock:
+            now = time.time()
+            self._record_stat("failed", now)
             self.state["last_failure"] = {"uid": str(uid), "reason": sanitize_failure(reason),
-                                          "at": time.time()}
+                                          "at": now}
             if (self.state.get("pending") or {}).get("uid") == str(uid):
                 self.state["pending"] = None
             self._save()

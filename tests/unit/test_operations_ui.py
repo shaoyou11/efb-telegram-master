@@ -84,6 +84,50 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     assert "自动恢复：总开关开启｜全天开启｜凌晨关闭" in text
 
 
+def test_status_text_shows_platform_sync_backup_and_queue_health(tmp_path, monkeypatch):
+    state = tmp_path / "operations/state"
+    state.mkdir(parents=True)
+    (tmp_path / "deployment-manifest.json").write_text(json.dumps({
+        "platform": "feiniu-t640",
+        "compose_project": "efb2026",
+    }), encoding="utf-8")
+    (state / "image-metadata.json").write_text(json.dumps({
+        "build_time": "2026-08-23T01:02:03Z",
+        "revision": "efb-test-revision",
+        "latest_match": True,
+    }), encoding="utf-8")
+    (tmp_path / "config-drift-latest.json").write_text(json.dumps({
+        "healthy": True,
+        "issues": [],
+    }), encoding="utf-8")
+    (tmp_path / "backup-audit-latest.json").write_text(json.dumps({
+        "healthy": True,
+        "latest_backup": "config-1",
+    }), encoding="utf-8")
+    (tmp_path / "delivery-reconcile-latest.json").write_text(json.dumps({
+        "pending_count": 0,
+        "failed_count": 0,
+        "oldest_pending_seconds": 0,
+    }), encoding="utf-8")
+
+    ui = OperationsUI.__new__(OperationsUI)
+    ui.data_root = Path(tmp_path)
+    ui.started_at = 1000
+    ui.channel = SimpleNamespace()
+    monkeypatch.setattr(ui, "_wechat_login", lambda: "已登录")
+    monkeypatch.setattr(ui, "_bot_api", lambda: "正常")
+    monkeypatch.setattr("efb_telegram_master.operations_ui.time.time", lambda: 1000)
+
+    text = ui.health_text()
+
+    assert "部署平台：feiniu-t640" in text
+    assert "配置同步：正常" in text
+    assert "镜像构建时间：2026-08-23T01:02:03Z" in text
+    assert "GHCR latest：匹配" in text
+    assert "队列最近延迟：0秒" in text
+    assert "备份校验：正常" in text
+
+
 def test_status_falls_back_to_persistent_delivery_queues(tmp_path, monkeypatch):
     state = tmp_path / "operations/state"
     state.mkdir(parents=True)

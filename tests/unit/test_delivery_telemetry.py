@@ -15,6 +15,26 @@ def test_delivery_telemetry_records_and_clears_pending(tmp_path):
     assert state["last_delivered_at"] > 0
 
 
+def test_delivery_telemetry_keeps_24_hour_counts_without_message_text(tmp_path, monkeypatch):
+    path = tmp_path / "delivery.json"
+    clock = iter([1000.0, 1002.5, 1003.0, 1004.0])
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: next(clock))
+    telemetry = DeliveryTelemetry(path)
+    telemetry.inbound("message-1", "Image", 100)
+    telemetry.delivered("message-1")
+    telemetry.filtered("message-2")
+    telemetry.failed("message-3", "network error")
+
+    stats = telemetry.stats_snapshot(now=1004.0)
+
+    assert stats["received"] == 1
+    assert stats["delivered"] == 1
+    assert stats["filtered"] == 1
+    assert stats["failed"] == 1
+    assert stats["average_delay_ms"] == 2500
+    assert "message-1" not in json.dumps(stats, ensure_ascii=False)
+
+
 def test_failure_reason_is_redacted():
     result = sanitize_failure("https://host/bot123:secret/send failed at /private/file.jpg")
     assert "secret" not in result
