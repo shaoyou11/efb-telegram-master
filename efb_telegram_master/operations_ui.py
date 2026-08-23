@@ -104,6 +104,39 @@ def load_json(path: Path) -> dict:
         return {}
 
 
+def delivery_stats_summary(delivery: dict, now=None) -> str:
+    now = time.time() if now is None else float(now)
+    events = delivery.get("stats", []) if isinstance(delivery, dict) else []
+    if not isinstance(events, list):
+        return "未记录"
+    cutoff = now - 24 * 60 * 60
+    counts = {"received": 0, "delivered": 0, "filtered": 0, "failed": 0}
+    delays = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        try:
+            if float(event.get("at", 0)) < cutoff:
+                continue
+        except (TypeError, ValueError):
+            continue
+        kind = event.get("kind")
+        if kind in counts:
+            counts[kind] += 1
+        if event.get("delay_ms") is not None:
+            try:
+                delays.append(max(0, int(event["delay_ms"])))
+            except (TypeError, ValueError):
+                pass
+    if not any(counts.values()) and not delays:
+        return "未记录"
+    average = int(sum(delays) / len(delays)) if delays else 0
+    return (
+        f"收{counts['received']}｜成{counts['delivered']}｜"
+        f"过滤{counts['filtered']}｜失败{counts['failed']}｜平均{average}毫秒"
+    )
+
+
 def _record_count(value) -> int:
     if isinstance(value, (dict, list)):
         return len(value)
@@ -701,6 +734,9 @@ class OperationsUI:
         database = load_json(self.data_root / "database-audit-latest.json")
         capacity = load_json(self.data_root / "capacity-audit-latest.json")
         upstream = load_json(self.data_root / "upstream-audit-latest.json")
+        image = load_json(state_root / "image-metadata.json")
+        drift = load_json(self.data_root / "config-drift-latest.json")
+        backup_audit = load_json(self.data_root / "backup-audit-latest.json")
         watchdog = self._watchdog_state()
         login_event = watchdog.get("login_event") if isinstance(watchdog.get("login_event"), dict) else {}
         spoiler_store = getattr(self.channel, "author_name_spoiler_store", None)
@@ -725,6 +761,30 @@ class OperationsUI:
         scheduler = slave_messages.scheduler.snapshot() if slave_messages else {}
         trace = slave_messages.trace.latest() if slave_messages else None
         updates = upstream.get("update_count", 0)
+        manifest = load_json(self.data_root / "deployment-manifest.json")
+        platform = str(manifest.get("platform") or "未记录")
+        sync_issues = drift.get("issues") if isinstance(drift.get("issues"), list) else []
+        config_sync = "正常" if drift.get("healthy") is True else (
+            f"异常（{len(sync_issues)}项）" if sync_issues else "待检查"
+        )
+        latest_match = image.get("latest_match")
+        if latest_match is None:
+            legacy_latest_match = image.get("ghcr_latest_match")
+            if legacy_latest_match in {"匹配", "不匹配"}:
+                latest_match = legacy_latest_match == "匹配"
+        latest_text = (
+            "匹配" if latest_match is True else
+            "不匹配" if latest_match is False else
+            "待检查"
+        )
+        queue_delay = (
+            _duration_text(reconcile.get("oldest_pending_seconds", 0))
+            if reconcile else "待检查"
+        )
+        backup_check = "正常" if backup_audit.get("healthy") is True else (
+            "待检查" if not backup_audit else "异常"
+        )
+        stats_text = delivery_stats_summary(delivery)
         if watchdog:
             recovery_text = (
                 "总开关" + ("开启" if watchdog.get("master_enabled") else "关闭")
@@ -755,6 +815,13 @@ class OperationsUI:
         return (
             "EFB 综合状态\n\n"
             f"EFB 运行时间：{format_uptime(self.started_at)}\n"
+            f"部署平台：{platform}\n"
+            f"镜像构建时间：{image.get('build_time', '未记录')}\n"
+            f"GHCR latest：{latest_text}\n"
+            f"配置同步：{config_sync}\n"
+            f"备份校验：{backup_check}\n"
+            f"队列最近延迟：{queue_delay}\n"
+            f"近24小时投递：{stats_text}\n"
             f"微信：{self._wechat_login()}\n"
             f"Telegram Bot API：{self._bot_api()}\n"
             f"四容器与共享网络：{stack_status}\n"
