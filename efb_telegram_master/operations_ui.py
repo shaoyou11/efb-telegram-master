@@ -1086,9 +1086,9 @@ class OperationsUI:
                 f"{watchdog.get('daily_end', '03:50')}"
             )
             recovery_config = (
-                f"每{_duration_text(watchdog.get('poll_seconds', 120))}检查｜"
-                f"冷却{_duration_text(watchdog.get('click_cooldown_seconds', 120))}｜"
-                f"连续失败{watchdog.get('max_recovery_failures', 3)}次暂停"
+                f"检查间隔：{_duration_text(watchdog.get('poll_seconds', 120))}\n"
+                f"点击冷却：{_duration_text(watchdog.get('click_cooldown_seconds', 120))}\n"
+                f"连续失败：{watchdog.get('max_recovery_failures', 3)}次后暂停"
             )
             login_protection = (
                 "扫码保护"
@@ -1103,6 +1103,9 @@ class OperationsUI:
             recovery_config = "等待检查"
             login_protection = "等待检查"
             diagnostic_retention = "等待检查"
+        recovery_config_lines = "\n".join(
+            f"  {item}" for item in recovery_config.splitlines()
+        )
         reconcile_note = (
             "投递对账：已过期，当前数字按实时队列\n"
             if queue["reconcile_stale"] else ""
@@ -1123,7 +1126,7 @@ class OperationsUI:
             f"最近恢复动作：{format_health_action(health.get('action'))}\n"
             f"自动恢复：{recovery_text}\n"
             f"恢复时段：{recovery_window}\n"
-            f"恢复配置：{recovery_config}\n"
+            f"恢复配置：\n{recovery_config_lines}\n"
             f"登录保护：{login_protection}\n"
             f"失败诊断：{diagnostic_retention}\n"
             f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
