@@ -1,9 +1,10 @@
+import hashlib
 import json
 import os
 import re
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from importlib import metadata
 from pathlib import Path
 from typing import Dict, List
@@ -11,14 +12,18 @@ from urllib import request
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackContext
+from ehforwarderbot import coordinator
 
 from .utils import chat_id_str_to_id
 from .issues import build_issues
+from .failed_media import cleanup_failed_media
 
 
 SENSITIVE_KEY = re.compile(r"(?i)^(token|password|passwd|secret|api_hash|api_id|vncpass)$")
 BOT_TOKEN = re.compile(r"bot\d+:[^/\s]+")
 URL = re.compile(r"https?://[^\s]+")
+DELIVERY_PAGE_SIZE = 5
+SHANGHAI_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 
 
 def redact_error(value: str) -> str:
@@ -627,6 +632,106 @@ def format_timestamp(value) -> str:
         return "暂无"
 
 
+def format_session_timestamp(value) -> str:
+    try:
+        timestamp = float(value)
+        if timestamp <= 0:
+            return "暂无"
+        return datetime.fromtimestamp(timestamp, SHANGHAI_TIMEZONE).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+    except (TypeError, ValueError, OSError):
+        return "暂无"
+
+
+def format_audit_status(report: dict) -> str:
+    if not report:
+        return "未检查"
+    status = "正常" if report.get("healthy", True) else "异常"
+    return f"{status}（检查时间{format_timestamp(report.get('checked_at'))}）"
+
+
+def format_backup_verification(report: dict) -> str:
+    if not report:
+        return "未检查"
+    status = "正常" if report.get("healthy", False) else "异常"
+    checks = []
+    for key, label in (("manifest", "清单"), ("sqlite", "SQLite"), ("decrypt", "解密")):
+        item = report.get(key) or {}
+        if item.get("status") == "ok":
+            checks.append(label)
+        elif key == "decrypt" and item.get("status") == "not_configured":
+            checks.append("解密未配置")
+    detail = f"（{'、'.join(checks)}）" if checks else ""
+    return f"{status}{detail}（检查时间{format_timestamp(report.get('checked_at'))}）"
+
+
+def format_maintenance_status(state: dict) -> str:
+    if not isinstance(state, dict) or not state:
+        return "关闭"
+    if state.get("enabled") or state.get("phase") not in (None, "", "idle"):
+        return f"进行中（{_clean_text(state.get('phase'), 30)}）"
+    if state.get("last_result") == "rollback":
+        return "关闭（上次已回滚）"
+    if state.get("last_result") == "failed":
+        return "关闭（上次失败）"
+    return "关闭"
+
+
+def format_manual_restart(state: dict) -> str:
+    if not isinstance(state, dict) or not state:
+        return "暂无"
+    status = state.get("status")
+    if status == "requested":
+        return "等待执行"
+    if status == "running":
+        return "执行中"
+    if status == "completed":
+        return f"最近完成 {format_timestamp(state.get('completed_at'))}"
+    if status == "failed":
+        return f"失败（{_clean_text(state.get('reason'), 50)}）"
+    return "暂无"
+
+
+def request_manual_restart(path: Path, now=None, requested_by=None) -> dict:
+    path = Path(path)
+    existing = load_json(path)
+    if existing.get("status") in {"requested", "running"}:
+        return existing
+    now = time.time() if now is None else float(now)
+    payload = {
+        "version": 1,
+        "request_id": f"manual-{int(now * 1000)}",
+        "scope": "all",
+        "status": "requested",
+        "requested_at": now,
+    }
+    if requested_by is not None:
+        payload["requested_by"] = int(requested_by)
+    _atomic_write_json(path, payload)
+    return payload
+
+
+def _clean_text(value, limit: int = 80) -> str:
+    text = " ".join(str(value or "").split())
+    return text[:limit] or "暂无"
+
+
+def _record_path(record: dict) -> str:
+    message = record.get("msg") if isinstance(record.get("msg"), dict) else {}
+    return str(record.get("path") or message.get("filepath") or "")
+
+
+def _record_time(record: dict) -> float:
+    message = record.get("msg") if isinstance(record.get("msg"), dict) else {}
+    for value in (record.get("created_at"), message.get("timestamp")):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
 def format_uptime(started_at, now=None) -> str:
     try:
         elapsed = max(0, int((time.time() if now is None else now) - float(started_at)))
@@ -650,16 +755,31 @@ class OperationsUI:
         self.channel = channel
         self.data_root = Path(os.getenv("EFB_DATA_ROOT", "/data"))
         self.started_at = time.time()
+        self._status_source_messages = {}
 
     @staticmethod
-    def markup(refresh: str = "", actions=()) -> InlineKeyboardMarkup:
+    def markup(refresh: str = "", actions=(), include_bridge: bool = False) -> InlineKeyboardMarkup:
         rows = []
         action_row = []
+        if include_bridge and not actions:
+            actions = (
+                ("投递明细", "delivery"),
+                ("异常中心", "issues"),
+                ("失败诊断", "diagnostic"),
+            )
         for label, action in actions:
             callback = action if str(action).startswith("ops:") else f"ops:{action}"
             action_row.append(InlineKeyboardButton(label, callback_data=callback))
         if action_row:
             rows.append(action_row)
+        if include_bridge:
+            row = [InlineKeyboardButton("Bridge 队列", callback_data="ops:bridge")]
+            row.append(InlineKeyboardButton("全部重启", callback_data="ops:restart-all"))
+            if refresh:
+                row.append(InlineKeyboardButton("刷新", callback_data=f"ops:{refresh}"))
+            rows.append(row)
+            rows.append([InlineKeyboardButton("关闭并删除", callback_data="ops:status-close")])
+            return InlineKeyboardMarkup(rows)
         row = []
         if refresh:
             row.append(InlineKeyboardButton("刷新", callback_data=f"ops:{refresh}"))
@@ -670,12 +790,26 @@ class OperationsUI:
     def _allowed(self, update: Update) -> bool:
         return bool(update.effective_user and update.effective_user.id in self.channel.config["admins"])
 
-    def _send(self, update: Update, text: str, refresh: str = "", actions=()):
-        markup = self.markup(refresh, actions=actions)
+    def _send(
+        self,
+        update: Update,
+        text: str,
+        refresh: str = "",
+        actions=(),
+        include_bridge: bool = False,
+        track_status_source: bool = False,
+    ):
+        markup = self.markup(refresh, actions=actions, include_bridge=include_bridge)
         if update.callback_query:
-            update.callback_query.edit_message_text(text, reply_markup=markup)
+            result = update.callback_query.edit_message_text(text, reply_markup=markup)
         else:
-            update.effective_message.reply_text(text, reply_markup=markup)
+            result = update.effective_message.reply_text(text, reply_markup=markup)
+        if track_status_source and not update.callback_query and result:
+            source = update.effective_message
+            self._status_source_messages[(result.chat.id, result.message_id)] = (
+                source.chat.id,
+                source.message_id,
+            )
 
     def _wechat_login(self) -> str:
         try:
@@ -737,6 +871,15 @@ class OperationsUI:
         image = load_json(state_root / "image-metadata.json")
         drift = load_json(self.data_root / "config-drift-latest.json")
         backup_audit = load_json(self.data_root / "backup-audit-latest.json")
+        maintenance = load_json(state_root / "maintenance.json")
+        manual_restart = load_json(state_root / "manual-restart.json")
+        session_events = load_json(
+            self.data_root
+            / "profiles"
+            / "comwechat"
+            / "honus.comwechat"
+            / "session-events.json"
+        )
         watchdog = self._watchdog_state()
         login_event = watchdog.get("login_event") if isinstance(watchdog.get("login_event"), dict) else {}
         spoiler_store = getattr(self.channel, "author_name_spoiler_store", None)
@@ -817,12 +960,17 @@ class OperationsUI:
             f"EFB 运行时间：{format_uptime(self.started_at)}\n"
             f"部署平台：{platform}\n"
             f"镜像构建时间：{image.get('build_time', '未记录')}\n"
+            f"运行版本：EFB {_package_version('ehforwarderbot')}｜"
+            f"Telegram Master {_package_version('efb-telegram-master')}｜"
+            f"ComWechat {_package_version('efb-wechat-comwechat-slave')}\n"
             f"GHCR latest：{latest_text}\n"
             f"配置同步：{config_sync}\n"
             f"备份校验：{backup_check}\n"
             f"队列最近延迟：{queue_delay}\n"
             f"近24小时投递：{stats_text}\n"
             f"微信：{self._wechat_login()}\n"
+            f"最近退出时间：{format_session_timestamp(session_events.get('last_logout_at'))}\n"
+            f"最近登录时间：{format_session_timestamp(session_events.get('last_login_at'))}\n"
             f"Telegram Bot API：{self._bot_api()}\n"
             f"四容器与共享网络：{stack_status}\n"
             f"最近恢复动作：{health.get('action', '暂无')}\n"
@@ -837,6 +985,10 @@ class OperationsUI:
             f"{bridge_text}"
             f"会话队列：活跃 {scheduler.get('active_chats', 0)}｜联系人 {scheduler.get('contact_chats', 0)}｜群聊 {scheduler.get('group_chats', 0)}\n"
             f"最近流转阶段：{trace.get('stage', '暂无') if trace else '暂无'}\n"
+            f"审计：投递 {format_audit_status(reconcile)}｜数据库 {format_audit_status(database)}\n"
+            f"容量 {format_audit_status(capacity)}｜上游 {format_audit_status(upstream)}\n"
+            f"维护模式：{format_maintenance_status(maintenance)}\n"
+            f"手动重启：{format_manual_restart(manual_restart)}\n"
             f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
             f"映射数据库：{database_status}\n"
             f"NAS 磁盘剩余：{disk_text}\n"
@@ -852,10 +1004,65 @@ class OperationsUI:
                 self.health_text(),
                 "status",
                 actions=(("投递明细", "delivery"), ("异常中心", "issues"), ("失败诊断", "diagnostic")),
+                include_bridge=True,
+                track_status_source=True,
             )
 
     def status(self, update: Update, context: CallbackContext):
         self.health(update, context)
+
+    def bridge_queue(self, update: Update, _context: CallbackContext):
+        if not self._allowed(update):
+            return
+        health = self._bridge_health()
+        active = self._bridge_active()
+        details = delivery_details(self.data_root, bridge_messages=active)
+        self._resolve_delivery_targets(details)
+        bridge_records = details.get("bridge", [])
+        if health:
+            queue_text = (
+                f"暂存 {health.get('staged_size', 0)}｜"
+                f"待投递 {health.get('pending_size', 0)}｜"
+                f"处理中 {health.get('inflight_size', 0)}｜"
+                f"总计 {health.get('queue_size', 0)}｜"
+                f"死信 {health.get('dead_letter_size', 0)}"
+            )
+        else:
+            queue_text = "暂不可读"
+        lines = ["EFB Bridge 队列", "", f"队列状态：{queue_text}"]
+        if not bridge_records:
+            lines.extend(["", "当前没有活动消息。"])
+        for index, item in enumerate(bridge_records[:10], 1):
+            lines.extend([
+                "",
+                f"#{index} {item.get('type', '未知')}｜{_clean_text(item.get('filename'), 50)}",
+                f"微信会话：{_clean_text(item.get('wechat_chat'), 60)}",
+                f"发送者：{_clean_text(item.get('sender'), 60)}",
+                f"状态：{_clean_text(item.get('status'), 100)}",
+                f"消息：{_clean_text(item.get('identifier'), 60)}",
+            ])
+        if len(bridge_records) > 10:
+            lines.extend(["", f"仅显示前 10 条，当前还有 {len(bridge_records) - 10} 条。"])
+        self._send(update, "\n".join(lines), actions=(("投递明细", "delivery"),))
+
+    def restart_all(self, update: Update, _context: CallbackContext):
+        if not self._allowed(update):
+            return
+        state_path = self.data_root / "operations" / "state" / "manual-restart.json"
+        state = request_manual_restart(
+            state_path,
+            requested_by=getattr(update.effective_user, "id", None),
+        )
+        if state.get("status") == "requested":
+            text = (
+                "EFB 全部重启\n\n"
+                "已提交手动重启请求。NAS 健康守护会按依赖顺序处理，"
+                "完成后再检查四项容器健康状态。\n\n"
+                "执行期间消息转发会短暂暂停，不会删除微信会话或配置。"
+            )
+        else:
+            text = f"EFB 全部重启\n\n当前已有请求：{format_manual_restart(state)}。"
+        self._send(update, text, "status", include_bridge=True)
 
     def delivery_markup(self, details: dict) -> InlineKeyboardMarkup:
         rows = []
@@ -885,6 +1092,376 @@ class OperationsUI:
         ])
         rows.append([InlineKeyboardButton("关闭页面", callback_data="ops:close")])
         return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def _delivery_key(kind: str, key: str) -> str:
+        if kind == "pending":
+            return hashlib.sha1(str(key).encode("utf-8")).hexdigest()[:12]
+        return str(key)
+
+    @staticmethod
+    def delivery_overview_markup(pending: int, failed: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    f"待处理 {pending} 条",
+                    callback_data="ops:delivery:list:pending:0",
+                ),
+                InlineKeyboardButton(
+                    f"失败 {failed} 条",
+                    callback_data="ops:delivery:list:failed:0",
+                ),
+            ],
+            [
+                InlineKeyboardButton("刷新", callback_data="ops:delivery"),
+                InlineKeyboardButton("关闭", callback_data="ops:close"),
+            ],
+        ])
+
+    @staticmethod
+    def delivery_list_markup(
+        kind: str,
+        records: List[tuple],
+        page: int = 0,
+    ) -> InlineKeyboardMarkup:
+        total_pages = max(1, (len(records) + DELIVERY_PAGE_SIZE - 1) // DELIVERY_PAGE_SIZE)
+        page = min(max(0, int(page)), total_pages - 1)
+        start = page * DELIVERY_PAGE_SIZE
+        page_records = records[start:start + DELIVERY_PAGE_SIZE]
+        rows = []
+        for index, (key, _record) in enumerate(page_records, start=start + 1):
+            identity = OperationsUI._delivery_key(kind, key)
+            buttons = [InlineKeyboardButton(
+                f"查看 {index}",
+                callback_data=f"ops:delivery:view:{kind}:{identity}",
+            )]
+            buttons.append(InlineKeyboardButton(
+                "立即投递" if kind == "pending" else "重新投递",
+                callback_data=(
+                    f"ops:delivery:push:{identity}"
+                    if kind == "pending"
+                    else f"ops:delivery:retry:{identity}"
+                ),
+            ))
+            buttons.append(InlineKeyboardButton(
+                "删除",
+                callback_data=f"ops:delivery:delete:{kind}:{identity}",
+            ))
+            rows.append(buttons)
+        if not page_records:
+            rows.append([InlineKeyboardButton("当前没有可管理记录", callback_data="ops:delivery")])
+        navigation = []
+        if page > 0:
+            navigation.append(InlineKeyboardButton(
+                "上一页", callback_data=f"ops:delivery:list:{kind}:{page - 1}"
+            ))
+        navigation.append(InlineKeyboardButton("返回投递明细", callback_data="ops:delivery"))
+        if page < total_pages - 1:
+            navigation.append(InlineKeyboardButton(
+                "下一页", callback_data=f"ops:delivery:list:{kind}:{page + 1}"
+            ))
+        rows.append(navigation)
+        rows.append([InlineKeyboardButton("关闭", callback_data="ops:close")])
+        return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def _delivery_result_markup() -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("返回投递明细", callback_data="ops:delivery")],
+            [InlineKeyboardButton("关闭", callback_data="ops:close")],
+        ])
+
+    @staticmethod
+    def _delivery_confirm_markup(action: str, kind: str, identity: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "确认",
+                    callback_data=f"ops:delivery:{action}-confirm:{kind}:{identity}",
+                ),
+                InlineKeyboardButton(
+                    "取消",
+                    callback_data=f"ops:delivery:list:{kind}:0",
+                ),
+            ],
+        ])
+
+    def _render(self, update: Update, text: str, markup: InlineKeyboardMarkup):
+        if update.callback_query:
+            update.callback_query.edit_message_text(text, reply_markup=markup)
+        elif update.effective_message:
+            update.effective_message.reply_text(text, reply_markup=markup)
+
+    def _pending_records(self) -> List[tuple]:
+        data = load_json(
+            self.data_root / "profiles" / "comwechat" / "honus.comwechat" / "pending-files.json"
+        )
+        records = [
+            (str(key), value)
+            for key, value in data.items()
+            if isinstance(value, dict)
+        ]
+        return sorted(records, key=lambda item: _record_time(item[1]), reverse=True)
+
+    def _failed_store(self):
+        slave_messages = getattr(self.channel, "slave_messages", None)
+        return getattr(slave_messages, "failure_store", None)
+
+    def _failed_records(self) -> List[tuple]:
+        store = self._failed_store()
+        if store is not None and callable(getattr(store, "items", None)):
+            records = store.items()
+        else:
+            records = [
+                (str(key), value)
+                for key, value in load_json(
+                    self.data_root / "operations" / "state" / "failed-deliveries.json"
+                ).items()
+                if isinstance(value, dict)
+            ]
+        return sorted(records, key=lambda item: _record_time(item[1]), reverse=True)
+
+    def _find_delivery_record(self, kind: str, identity: str):
+        records = self._pending_records() if kind == "pending" else self._failed_records()
+        for key, record in records:
+            if self._delivery_key(kind, key) == identity:
+                return key, record
+        return None
+
+    def _delivery_list_text(self, kind: str, records: List[tuple], page: int) -> str:
+        total_pages = max(1, (len(records) + DELIVERY_PAGE_SIZE - 1) // DELIVERY_PAGE_SIZE)
+        page = min(max(0, int(page)), total_pages - 1)
+        start = page * DELIVERY_PAGE_SIZE
+        page_records = records[start:start + DELIVERY_PAGE_SIZE]
+        title = "待处理投递" if kind == "pending" else "失败投递"
+        lines = [f"EFB {title}（第 {page + 1}/{total_pages} 页）", ""]
+        if not page_records:
+            lines.append("当前没有可管理记录。")
+        for index, (key, record) in enumerate(page_records, start=start + 1):
+            message = record.get("msg") if isinstance(record.get("msg"), dict) else {}
+            if kind == "pending":
+                filename = Path(_record_path(record)).name or "附件路径未记录"
+                lines.append(
+                    f"{index}. {_clean_text(record.get('chat_name'), 30)}｜"
+                    f"{_clean_text(record.get('author_name'), 24)}｜{_clean_text(filename, 40)}"
+                )
+            else:
+                filename = record.get("filename") or Path(_record_path(record)).name
+                lines.append(
+                    f"{index}. {_clean_text(record.get('chat'), 30)}｜"
+                    f"{_clean_text(filename, 40)}｜{format_timestamp(record.get('created_at'))}"
+                )
+                if record.get("error"):
+                    lines.append(f"   原因：{redact_error(_clean_text(record.get('error'), 100))}")
+        if kind == "pending":
+            lines.extend([
+                "",
+                "待处理文件由 ComWeChat 自动投递；“立即投递”会跳过稳定等待。",
+                "“删除”只删除待发记录，不删除微信原文件。",
+            ])
+        else:
+            lines.extend(["", "失败记录支持查看、重新投递或删除；删除单条记录立即执行。"])
+        return "\n".join(lines)
+
+    def _delivery_record_text(self, kind: str, key: str, record: dict) -> str:
+        message = record.get("msg") if isinstance(record.get("msg"), dict) else {}
+        if kind == "pending":
+            filename = Path(_record_path(record)).name or "附件路径未记录"
+            return (
+                "EFB 待处理投递\n\n"
+                f"文件：{_clean_text(filename, 80)}\n"
+                f"微信会话：{_clean_text(record.get('chat_name'), 80)}\n"
+                f"发送者：{_clean_text(record.get('author_name') or record.get('author_uid'), 80)}\n"
+                f"消息：{_clean_text(message.get('msgid') or message.get('uid') or key, 80)}\n"
+                f"类型：{_clean_text(message.get('type'), 30)}\n"
+                f"进入时间：{format_timestamp(_record_time(record))}\n"
+                f"内容：{_clean_text(message.get('text') or message.get('content'), 160)}\n\n"
+                "状态：ComWeChat 正在等待附件准备或稳定。\n"
+                "立即投递会跳过稳定等待；删除只移除待发记录，不删除微信原文件。"
+            )
+        filename = record.get("filename") or Path(_record_path(record)).name or "附件未记录"
+        return (
+            "EFB 失败投递\n\n"
+            f"文件：{_clean_text(filename, 80)}\n"
+            f"微信会话：{_clean_text(record.get('chat'), 80)}\n"
+            f"发送者：{_clean_text(record.get('author_name') or record.get('author_uid'), 80)}\n"
+            f"发送到：{_telegram_target_text(record)}\n"
+            f"消息：{_clean_text(record.get('uid'), 80)}\n"
+            f"类型：{_clean_text(record.get('type'), 30)}\n"
+            f"失败时间：{format_timestamp(record.get('created_at'))}\n"
+            f"过期时间：{format_timestamp(record.get('expires'))}\n"
+            f"内容：{_clean_text(record.get('text'), 160)}\n"
+            f"原因：{redact_error(_clean_text(record.get('error'), 140))}\n"
+            f"附件：{'已持久化' if record.get('storage') == 'durable' else '未持久化'}"
+        )
+
+    def _comwechat_channel(self):
+        try:
+            return coordinator.get_module_by_id("honus.comwechat")
+        except (KeyError, AttributeError, TypeError):
+            return None
+
+    def _show_delivery_list(self, update: Update, kind: str, page: int):
+        records = self._pending_records() if kind == "pending" else self._failed_records()
+        self._render(
+            update,
+            self._delivery_list_text(kind, records, page),
+            self.delivery_list_markup(kind, records, page),
+        )
+
+    def _show_delivery_record(self, update: Update, kind: str, identity: str):
+        found = self._find_delivery_record(kind, identity)
+        if not found:
+            self._render(update, "这条投递记录已不存在或已过期。", self._delivery_result_markup())
+            return
+        key, record = found
+        action = "push" if kind == "pending" else "retry"
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "立即投递" if kind == "pending" else "重新投递",
+                    callback_data=f"ops:delivery:{action}:{identity}",
+                ),
+                InlineKeyboardButton(
+                    "删除",
+                    callback_data=f"ops:delivery:delete:{kind}:{identity}",
+                ),
+            ],
+            [InlineKeyboardButton(
+                "返回列表", callback_data=f"ops:delivery:list:{kind}:0"
+            )],
+            [InlineKeyboardButton("关闭", callback_data="ops:close")],
+        ])
+        self._render(update, self._delivery_record_text(kind, key, record), markup)
+
+    def _confirm_delivery_action(self, update: Update, action: str, kind: str, identity: str):
+        labels = {
+            "push": "立即投递这条待处理附件",
+            "retry": "重新投递这条失败附件",
+        }
+        update.callback_query.answer()
+        self._render(
+            update,
+            f"确认：{labels[action]}？",
+            self._delivery_confirm_markup(action, kind, identity),
+        )
+
+    def _execute_delivery_action(self, update: Update, action: str, kind: str, identity: str):
+        found = self._find_delivery_record(kind, identity)
+        if not found:
+            text = "这条投递记录已不存在或已过期。"
+        elif action in ("push", "delete") and kind == "pending":
+            key, _record = found
+            slave = self._comwechat_channel()
+            if slave is None:
+                text = "ComWeChat 当前不可用。"
+            elif action == "delete":
+                store = getattr(slave, "pending_file_store", None)
+                if store is None or not callable(getattr(store, "remove", None)):
+                    text = "ComWeChat 当前版本不支持删除待发记录。"
+                else:
+                    store.remove(key)
+                    getattr(slave, "file_msg", {}).pop(key, None)
+                    getattr(slave, "file_retry_at", {}).pop(key, None)
+                    text = "已删除待处理记录，微信原文件未删除。"
+            else:
+                method = getattr(slave, "request_pending_file_delivery", None)
+                if callable(method):
+                    result = method(key)
+                    text = {
+                        "queued": "已请求立即投递，ComWeChat 将继续处理。",
+                        "not_found": "待处理记录已不存在。",
+                        "not_ready": "原文件尚未准备好，暂未强制投递。",
+                    }.get(result, "待处理记录状态未改变。")
+                else:
+                    if key not in getattr(slave, "file_msg", {}):
+                        restore = getattr(slave, "restore_pending_file_messages", None)
+                        if callable(restore):
+                            restore()
+                    if key in getattr(slave, "file_msg", {}):
+                        getattr(slave, "file_retry_at", {})[key] = 0
+                        text = "已请求立即投递，ComWeChat 将跳过当前等待后处理。"
+                    else:
+                        text = "待处理记录已不存在或尚未恢复到 ComWeChat 内存队列。"
+        elif action == "retry" and kind == "failed":
+            token, record = found
+            slave_messages = getattr(self.channel, "slave_messages", None)
+            retry = getattr(slave_messages, "_retry_persisted", None)
+            path = record.get("path")
+            if not callable(retry):
+                text = "失败投递处理器当前不可用。"
+            elif not path or not os.path.isfile(path):
+                text = "失败附件副本已不存在，无法重新投递。"
+            else:
+                try:
+                    retry(token, record)
+                except Exception as error:
+                    text = f"重新投递失败：{redact_error(error)}"
+                else:
+                    text = "已重新投递；成功后该失败记录和失败副本会自动清理。"
+        elif action == "delete" and kind == "failed":
+            token, record = found
+            store = self._failed_store()
+            if store is None:
+                text = "失败记录存储当前不可用。"
+            else:
+                store.remove(token)
+                slave_messages = getattr(self.channel, "slave_messages", None)
+                root = getattr(
+                    slave_messages,
+                    "failed_media_root",
+                    self.data_root / "operations" / "failed-media",
+                )
+                cleaned = cleanup_failed_media(record.get("path", ""), root)
+                text = (
+                    "已删除失败记录；EFB 保存的失败副本已清理。"
+                    if cleaned
+                    else "已删除失败记录；未找到对应的 EFB 失败副本。"
+                )
+        else:
+            text = "投递操作与记录类型不匹配。"
+        if update.callback_query:
+            update.callback_query.answer()
+        self._render(update, "EFB 投递操作结果\n\n" + text, self._delivery_result_markup())
+
+    def delivery_callback(self, update: Update, _context: CallbackContext):
+        query = update.callback_query
+        if not query or not self._allowed(update):
+            if query:
+                query.answer("无权执行", show_alert=True)
+            return
+        parts = (query.data or "").split(":")
+        if len(parts) < 3 or parts[:2] != ["ops", "delivery"]:
+            query.answer("无效操作", show_alert=True)
+            return
+        if parts[2] == "list" and len(parts) == 5 and parts[3] in ("pending", "failed"):
+            try:
+                page = int(parts[4])
+            except ValueError:
+                query.answer("页码无效", show_alert=True)
+                return
+            query.answer()
+            self._show_delivery_list(update, parts[3], page)
+            return
+        if parts[2] == "view" and len(parts) == 5 and parts[3] in ("pending", "failed"):
+            query.answer()
+            self._show_delivery_record(update, parts[3], parts[4])
+            return
+        if parts[2] in ("push", "retry") and len(parts) == 4:
+            self._confirm_delivery_action(
+                update,
+                parts[2],
+                "pending" if parts[2] == "push" else "failed",
+                parts[3],
+            )
+            return
+        if parts[2] in ("push-confirm", "retry-confirm") and len(parts) == 5:
+            self._execute_delivery_action(update, parts[2][:-8], parts[3], parts[4])
+            return
+        if parts[2] == "delete" and len(parts) == 5 and parts[3] in ("pending", "failed"):
+            self._execute_delivery_action(update, "delete", parts[3], parts[4])
+            return
+        query.answer("无效操作", show_alert=True)
 
     def _resolve_delivery_targets(self, details: dict) -> None:
         """Fill pending targets from the durable EFB chat/topic associations."""
@@ -922,20 +1499,30 @@ class OperationsUI:
                 except Exception:
                     continue
 
-    def delivery(self, update: Update, _context: CallbackContext):
+    def delivery_overview(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):
             return
-        details = delivery_details(
-            self.data_root,
-            bridge_messages=self._bridge_active(),
+        reconcile = load_json(self.data_root / "delivery-reconcile-latest.json")
+        queue = delivery_summary(self.data_root, reconcile, bridge=self._bridge_health())
+        pending_records = self._pending_records()
+        failed_records = self._failed_records()
+        text = (
+            "EFB 投递明细\n\n"
+            f"待处理：{queue['pending']} 条\n"
+            f"失败：{queue['failed']} 条\n"
+            f"Bridge 活动：{queue.get('bridge_active', 0)} 条\n"
+            f"失败附件已持久化：{queue['persisted_failed_media']} 条\n\n"
+            f"可查看记录：待处理 {len(pending_records)} 条｜失败 {len(failed_records)} 条\n"
+            "点击类别后进入列表；每条记录可查看、投递或删除。"
         )
-        self._resolve_delivery_targets(details)
-        text = format_delivery_details(self.data_root, details=details)
-        markup = self.delivery_markup(details)
-        if update.callback_query:
-            update.callback_query.edit_message_text(text, reply_markup=markup)
-        else:
-            update.effective_message.reply_text(text, reply_markup=markup)
+        self._render(
+            update,
+            text,
+            self.delivery_overview_markup(queue["pending"], queue["failed"]),
+        )
+
+    def delivery(self, update: Update, context: CallbackContext):
+        self.delivery_overview(update, context)
 
     def delivery_clear_confirm(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):
@@ -1141,15 +1728,33 @@ class OperationsUI:
         query = update.callback_query
         if not query or not self._allowed(update):
             return
-        action = (query.data or "").split(":", 1)[-1]
-        if action == "close":
+        data = query.data or ""
+        if data.startswith("ops:delivery:"):
+            self.delivery_callback(update, context)
+            return
+        action = data.split(":", 1)[-1]
+        if action in {"close", "status-close"}:
             query.answer()
-            query.message.delete()
+            source = self._status_source_messages.pop(
+                (query.message.chat.id, query.message.message_id),
+                None,
+            ) if action == "status-close" else None
+            try:
+                query.message.delete()
+            except Exception:
+                pass
+            if source:
+                try:
+                    self.channel.bot_manager.delete_message(*source)
+                except Exception:
+                    pass
             return
         handlers = {
             "health": self.health,
             "status": self.status,
             "delivery": self.delivery,
+            "bridge": self.bridge_queue,
+            "restart-all": self.restart_all,
             "delivery_clear": self.delivery_clear_confirm,
             "delivery_clear_confirm": self.delivery_clear_execute,
             "diagnostic": self.diagnostic,
