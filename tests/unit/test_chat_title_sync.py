@@ -35,3 +35,8 @@ def test_extract_service_chat_name_from_historical_customer_service_message():
 
 def test_build_private_chat_title_for_historical_customer_service_name():
     assert MODULE.build_private_chat_title("💻", "Anker售后") == "💻👤 Anker售后"
+
+
+def test_forced_topic_sync_is_reserved_for_name_recovery():
+    assert MODULE.should_sync_topic_title("", "gh_366bf6794a09", force=True)
+    assert not MODULE.should_sync_topic_title("我的工作群", "gh_366bf6794a09")

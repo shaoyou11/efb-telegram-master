@@ -26,3 +26,8 @@ def should_auto_rename(current_title: str, chat_uid: str) -> bool:
         return False
     undecorated_title = LEADING_DECORATION.sub("", current_title or "").strip()
     return undecorated_title == chat_uid
+
+
+def should_sync_topic_title(previous_title: str, chat_uid: str, force: bool = False) -> bool:
+    """Allow a one-time source-confirmed recovery when no cached title exists."""
+    return force or should_auto_rename(previous_title, chat_uid)
