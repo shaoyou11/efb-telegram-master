@@ -10,9 +10,14 @@ from efb_telegram_master.operations_ui import (
     backup_summary,
     delivery_summary,
     format_backup_verification,
+    format_compact_status,
+    format_contact_center,
     format_delivery_stats,
     format_health_action,
+    format_latest_match,
     format_manual_restart,
+    format_restore_rehearsal_status,
+    format_selftest_report,
     format_trace_report,
     format_issues_report,
     format_audit_status,
@@ -21,6 +26,7 @@ from efb_telegram_master.operations_ui import (
     load_json,
     redact_error,
     request_manual_restart,
+    request_restore_rehearsal,
     scan_sensitive_keys,
 )
 
@@ -33,6 +39,12 @@ def test_load_json_rejects_invalid_content(tmp_path):
 
 def test_format_timestamp_handles_missing_value():
     assert format_timestamp(None) == "暂无"
+
+
+def test_format_latest_match_accepts_legacy_verify_stack_field():
+    assert format_latest_match({"ghcr_latest_match": "匹配", "checked_at": 1000}).startswith(
+        "匹配（最近校验"
+    )
 
 
 def test_format_trace_report_joins_bridge_and_telegram_without_content():
@@ -208,6 +220,90 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     assert "视频号任务：等待 1｜请求 2｜处理中 0｜失败 0" in text
 
 
+def test_compact_status_contains_operational_summary_without_detail_sections():
+    text = format_compact_status({
+        "uptime": "2小时 3分钟",
+        "versions": "EFB 2.1.1.dev1",
+        "latest": "匹配",
+        "wechat": "已登录",
+        "bot_api": "正常",
+        "stack": "正常",
+        "queue": "待处理 0｜失败 0",
+        "bridge": "总计 0｜死信 0",
+        "latency": "最近完成 850 毫秒",
+        "recovery": "正常",
+        "backup": "正常",
+        "maintenance": "关闭",
+        "restore": "通过",
+    })
+
+    assert "EFB 综合状态（精简）" in text
+    assert "运行时间：2小时 3分钟" in text
+    assert "GHCR latest：匹配" in text
+    assert "恢复演练：通过" in text
+    assert "【巡检与存储】" not in text
+
+
+def test_selftest_report_exposes_each_read_only_check_without_secrets():
+    text = format_selftest_report([
+        {"name": "微信登录", "status": "ok", "detail": "已登录"},
+        {"name": "Telegram Bot API", "status": "failed", "detail": "接口暂不可用"},
+        {"name": "备份校验", "status": "unknown", "detail": "未检查"},
+    ])
+
+    assert "EFB 深度自检" in text
+    assert "微信登录：通过（已登录）" in text
+    assert "Telegram Bot API：异常（接口暂不可用）" in text
+    assert "备份校验：未检查（未检查）" in text
+    assert "token" not in text.lower()
+
+
+def test_contact_center_formats_unresolved_and_local_alias_history():
+    text = format_contact_center({
+        "unresolved": [{
+            "uid": "gh_demo",
+            "kind": "联系人",
+            "name": "gh_demo",
+            "history": ["旧名称"],
+        }],
+        "aliased": [{
+            "uid": "wxid_demo",
+            "kind": "群聊",
+            "name": "工作群",
+            "alias": "本地群",
+            "history": ["旧群名"],
+        }],
+    })
+
+    assert "未识别：1 条" in text
+    assert "标识：gh_demo" in text
+    assert "历史名称：旧名称" in text
+    assert "本地别名：本地群" in text
+    assert "旧群名" in text
+
+
+def test_restore_rehearsal_request_is_atomic_and_idempotent(tmp_path):
+    path = tmp_path / "restore-rehearsal-request.json"
+
+    first = request_restore_rehearsal(path, now=1000, requested_by=7)
+    second = request_restore_rehearsal(path, now=1001, requested_by=7)
+
+    assert first["status"] == "requested"
+    assert second["status"] == "requested"
+    assert second["request_id"] == first["request_id"]
+    assert json.loads(path.read_text(encoding="utf-8"))["requested_by"] == 7
+
+
+def test_restore_rehearsal_status_is_safe_and_concise():
+    assert format_restore_rehearsal_status({"status": "requested"}) == "等待执行"
+    assert format_restore_rehearsal_status({"status": "running"}) == "执行中"
+    assert format_restore_rehearsal_status({
+        "status": "completed",
+        "healthy": True,
+        "completed_at": 1000,
+    }).startswith("通过（最近完成")
+
+
 def test_status_explains_unknown_time_after_tracking_baseline(tmp_path, monkeypatch):
     session_path = tmp_path / "profiles/comwechat/honus.comwechat"
     session_path.mkdir(parents=True)
@@ -346,18 +442,25 @@ def test_status_markup_keeps_previous_operations_entries():
     assert "ops:diagnostic" in callbacks
 
 
-def test_status_markup_uses_two_rows_of_three_buttons():
+def test_status_markup_exposes_compact_detail_and_new_operations():
     markup = OperationsUI.markup("status", include_bridge=True)
 
     assert [button.text for button in markup.inline_keyboard[0]] == [
-        "投递明细", "异常中心", "失败诊断",
+        "详细状态", "投递明细", "异常中心",
     ]
     assert [button.text for button in markup.inline_keyboard[1]] == [
-        "Bridge 队列", "全部重启", "刷新",
+        "深度自检", "联系人中心", "失败诊断",
     ]
-
-    assert [button.text for button in markup.inline_keyboard[2]] == ["关闭并删除"]
-    assert markup.inline_keyboard[2][0].callback_data == "ops:status-close"
+    callbacks = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+    ]
+    assert "ops:status-detail" in callbacks
+    assert "ops:selftest" in callbacks
+    assert "ops:contacts" in callbacks
+    assert "ops:restore-rehearsal" in callbacks
+    assert "ops:status-close" in callbacks
 
 
 def test_delivery_stats_format_is_content_free():
