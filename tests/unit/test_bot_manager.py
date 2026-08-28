@@ -1,10 +1,71 @@
 import string
 import random
+from types import SimpleNamespace
 from typing import IO, Iterator, BinaryIO
 from unittest.mock import patch
 
 import pytest
+from telegram.error import BadRequest
 from telegram import InputMediaDocument
+
+from efb_telegram_master.bot_manager import TelegramBotManager
+
+
+def test_invalid_quote_retries_as_plain_reply():
+    calls = []
+
+    def send(_manager, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise BadRequest("Quote_text_invalid")
+        return "sent"
+
+    wrapped = TelegramBotManager.Decorators.retry_on_invalid_quote(send)
+    manager = SimpleNamespace(
+        logger=SimpleNamespace(warning=lambda *args, **kwargs: None),
+    )
+
+    result = wrapped(
+        manager,
+        chat_id=1,
+        api_kwargs={
+            "reply_parameters": {"message_id": 42, "quote": "stale quote"},
+            "show_caption_above_media": True,
+        },
+    )
+
+    assert result == "sent"
+    assert calls[1]["reply_to_message_id"] == 42
+    assert calls[1]["api_kwargs"] == {"show_caption_above_media": True}
+    assert "reply_parameters" not in calls[1]["api_kwargs"]
+
+
+def test_invalid_quote_drops_reply_when_target_is_missing():
+    calls = []
+
+    def send(_manager, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise BadRequest("Quote_text_invalid")
+        if len(calls) == 2:
+            raise BadRequest("message to reply not found")
+        return "sent"
+
+    wrapped = TelegramBotManager.Decorators.retry_on_invalid_quote(send)
+    manager = SimpleNamespace(
+        logger=SimpleNamespace(warning=lambda *args, **kwargs: None),
+    )
+
+    result = wrapped(
+        manager,
+        chat_id=1,
+        api_kwargs={"reply_parameters": {"message_id": 42, "quote": "stale quote"}},
+    )
+
+    assert result == "sent"
+    assert len(calls) == 3
+    assert "reply_to_message_id" not in calls[2]
+    assert "api_kwargs" not in calls[2]
 
 
 def test_text_prefix_suffix(channel, bot_admin):

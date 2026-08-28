@@ -186,6 +186,12 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     assert "最近登录：2026-08-08 03:30:00" in text
     assert "最近恢复动作：正常" in text
     assert "自动恢复：总开关开启｜全天开启｜凌晨关闭" in text
+    assert (
+        "恢复配置：\n"
+        "  检查间隔：2分钟\n"
+        "  点击冷却：2分钟\n"
+        "  连续失败：3次后暂停"
+    ) in text
     assert "登录保护：扫码保护开启｜启动保护1分30秒" in text
     assert "Bridge 队列：暂存 0｜待投递 0｜处理中 0｜总计 0｜死信 1" in text
     assert "投递审计：正常" in text

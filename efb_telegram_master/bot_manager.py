@@ -99,6 +99,57 @@ class TelegramBotManager(LocaleMixin):
                         timeout_backoff = min(timeout_backoff * 2, 180.0)
             return retry_wrapper
 
+        @staticmethod
+        def _error_message(error: Exception) -> str:
+            return str(getattr(error, "message", error))
+
+        @classmethod
+        def retry_on_invalid_quote(cls, fn: Callable):
+            """Retry a send when Telegram rejects an outdated quote."""
+            @wraps(fn)
+            def retry_wrapper(self, *args, **kwargs):
+                try:
+                    return fn(self, *args, **kwargs)
+                except telegram.error.BadRequest as error:
+                    message = cls._error_message(error).lower()
+                    api_kwargs = kwargs.get("api_kwargs")
+                    if "quote_text_invalid" not in message or not isinstance(
+                        api_kwargs, collections.abc.Mapping
+                    ):
+                        raise
+                    reply_parameters = api_kwargs.get("reply_parameters")
+                    if not isinstance(reply_parameters, collections.abc.Mapping):
+                        raise
+                    target_msg_id = reply_parameters.get("message_id")
+                    if not target_msg_id or "quote" not in reply_parameters:
+                        raise
+
+                    fallback_kwargs = dict(kwargs)
+                    fallback_api_kwargs = dict(api_kwargs)
+                    fallback_api_kwargs.pop("reply_parameters", None)
+                    if fallback_api_kwargs:
+                        fallback_kwargs["api_kwargs"] = fallback_api_kwargs
+                    else:
+                        fallback_kwargs.pop("api_kwargs", None)
+                    fallback_kwargs["reply_to_message_id"] = target_msg_id
+                    self.logger.warning(
+                        "Telegram rejected the quote; retrying without quote."
+                    )
+                    try:
+                        return fn(self, *args, **fallback_kwargs)
+                    except telegram.error.BadRequest as fallback_error:
+                        fallback_message = cls._error_message(fallback_error).lower()
+                        if "message to reply not found" not in fallback_message and \
+                                "reply message not found" not in fallback_message:
+                            raise
+                        fallback_kwargs.pop("reply_to_message_id", None)
+                        self.logger.warning(
+                            "Telegram reply target is unavailable; retrying without reply."
+                        )
+                        return fn(self, *args, **fallback_kwargs)
+
+            return retry_wrapper
+
         @classmethod
         def caption_strip_class_on_failure(cls, fn: Callable):
             @wraps(fn)
@@ -260,6 +311,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.retry_on_timeout
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
+    @Decorators.retry_on_invalid_quote
     def send_message(self, *args, prefix: str = '', suffix: str = '', **kwargs):
         """
         Send text message.
@@ -394,6 +446,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
+    @Decorators.retry_on_invalid_quote
     def send_audio(self, *args, **kwargs):
         """
         Send an audio file.
@@ -423,6 +476,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
+    @Decorators.retry_on_invalid_quote
     def send_voice(self, *args, **kwargs):
         """
         Send an voice message.
@@ -452,6 +506,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
+    @Decorators.retry_on_invalid_quote
     def send_video(self, *args, **kwargs):
         """
         Send an voice message.
@@ -481,6 +536,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
+    @Decorators.retry_on_invalid_quote
     def send_document(self, *args, **kwargs):
         """
         Send a document.
@@ -504,6 +560,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
+    @Decorators.retry_on_invalid_quote
     def send_animation(self, *args, **kwargs):
         """
         Send a document.
@@ -527,6 +584,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.inject_show_caption_above_media
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
+    @Decorators.retry_on_invalid_quote
     def send_photo(self, *args, **kwargs):
         """
         Send a document.
@@ -569,6 +627,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.retry_on_timeout
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
+    @Decorators.retry_on_invalid_quote
     def send_location(self, *args, **kwargs):
         self.rate_limiter.wait()
         return self.updater.bot.send_location(*args, **kwargs)
@@ -576,6 +635,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.retry_on_timeout
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
+    @Decorators.retry_on_invalid_quote
     def send_venue(self, *args, **kwargs):
         self.rate_limiter.wait()
         return self.updater.bot.send_venue(*args, **kwargs)
@@ -583,6 +643,7 @@ class TelegramBotManager(LocaleMixin):
     @Decorators.retry_on_timeout
     @Decorators.retry_on_chat_migration
     @Decorators.retry_on_topic_closed
+    @Decorators.retry_on_invalid_quote
     def send_sticker(self, *args, **kwargs):
         self.rate_limiter.wait()
         return self.updater.bot.send_sticker(*args, **kwargs)
