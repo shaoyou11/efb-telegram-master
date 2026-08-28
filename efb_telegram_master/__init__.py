@@ -641,7 +641,7 @@ class TelegramChannel(MasterChannel):
         except telegram.error.BadRequest as e:
             assert isinstance(update, Update)
             if e.message == "Message is not modified" and update.callback_query:
-                self.logger.error("Chill bro, don't click that fast.")
+                self.logger.debug("Telegram callback produced no changes.")
             else:
                 self.logger.exception("Message request is invalid.\n%s\n%s", str(update), str(error))
                 self.bot_manager.send_message(self.config['admins'][0],
