@@ -196,7 +196,11 @@ class TelegramChannel(MasterChannel):
         for command, handler in (
                 ("status", self.operations_ui.status),
                 ("health", self.operations_ui.health),
+                ("selftest", self.operations_ui.selftest),
                 ("issues", self.operations_ui.errors),
+                ("contacts", self.operations_ui.contacts),
+                ("contact_alias", self.operations_ui.contact_alias),
+                ("restore_test", self.operations_ui.restore_rehearsal),
                 ("bridge", self.operations_ui.bridge),
                 ("trace", self.operations_ui.trace),
                 ("version", self.operations_ui.version),

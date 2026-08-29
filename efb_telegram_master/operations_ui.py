@@ -2,6 +2,7 @@ import json
 import hashlib
 import os
 import re
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from importlib import metadata
@@ -526,17 +527,158 @@ def format_queue_latency(delivery: dict, now=None) -> str:
 
 
 def format_latest_match(metadata: dict) -> str:
-    value = metadata.get("latest_match") if isinstance(metadata, dict) else None
+    value = None
+    if isinstance(metadata, dict):
+        value = metadata.get("latest_match")
+        if value is None:
+            value = metadata.get("ghcr_latest_match")
     if isinstance(value, bool):
         status = "匹配" if value else "不匹配"
-    elif str(value).lower() in {"true", "yes", "1", "match", "matched"}:
+    elif str(value).lower() in {"true", "yes", "1", "match", "matched", "匹配"}:
         status = "匹配"
-    elif str(value).lower() in {"false", "no", "0", "mismatch", "unmatched"}:
+    elif str(value).lower() in {"false", "no", "0", "mismatch", "unmatched", "不匹配"}:
         status = "不匹配"
     else:
         status = "未校验"
     checked = format_timestamp(metadata.get("checked_at")) if isinstance(metadata, dict) else "暂无"
     return f"{status}（最近校验{checked}）"
+
+
+def format_compact_status(snapshot: dict) -> str:
+    return (
+        "EFB 综合状态（精简）\n\n"
+        f"运行时间：{snapshot.get('uptime', '暂无')}\n"
+        f"运行版本：{snapshot.get('versions', '未知')}\n"
+        f"GHCR latest：{snapshot.get('latest', '未校验')}\n"
+        f"微信：{snapshot.get('wechat', '未知')}\n"
+        f"Telegram Bot API：{snapshot.get('bot_api', '未知')}\n"
+        f"四容器与共享网络：{snapshot.get('stack', '未知')}\n"
+        f"投递队列：{snapshot.get('queue', '未知')}\n"
+        f"Bridge 队列：{snapshot.get('bridge', '未知')}\n"
+        f"队列最近延迟：{snapshot.get('latency', '暂无')}\n"
+        f"最近恢复动作：{snapshot.get('recovery', '暂无')}\n"
+        f"备份校验：{snapshot.get('backup', '未检查')}\n"
+        f"恢复演练：{snapshot.get('restore', '未检查')}\n"
+        f"维护模式：{snapshot.get('maintenance', '关闭')}"
+    )
+
+
+def format_selftest_report(checks: List[dict]) -> str:
+    checks = checks if isinstance(checks, list) else []
+    status_names = {"ok": "通过", "failed": "异常", "unknown": "未检查"}
+    statuses = [str(item.get("status", "unknown")) for item in checks]
+    if "failed" in statuses:
+        overall = "异常"
+    elif "unknown" in statuses:
+        overall = "未完成"
+    else:
+        overall = "通过"
+    lines = [
+        "EFB 深度自检",
+        "",
+        f"总体结果：{overall}",
+        "只读检查，不发送测试消息、不修改队列、不标记微信已读。",
+        "",
+    ]
+    for item in checks:
+        name = _clean_text(item.get("name"), 40)
+        status = status_names.get(str(item.get("status")), "未检查")
+        detail = _clean_text(item.get("detail"), 120)
+        lines.append(f"{name}：{status}（{detail}）")
+    if not checks:
+        lines.append("当前没有可执行的检查项。")
+    return "\n".join(lines)
+
+
+def format_contact_center(snapshot: dict) -> str:
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    unresolved = snapshot.get("unresolved") if isinstance(snapshot.get("unresolved"), list) else []
+    aliased = snapshot.get("aliased") if isinstance(snapshot.get("aliased"), list) else []
+    lines = [
+        "EFB 未识别联系人",
+        "",
+        f"未识别：{len(unresolved)} 条｜本地别名：{len(aliased)} 条",
+    ]
+    for index, item in enumerate(unresolved, start=1):
+        history = item.get("history") if isinstance(item.get("history"), list) else []
+        lines.extend([
+            "",
+            f"未识别 #{index}",
+            f"类型：{_clean_text(item.get('kind'), 20)}",
+            f"标识：{_clean_text(item.get('uid'), 80)}",
+            f"当前名称：{_clean_text(item.get('name'), 80)}",
+            f"历史名称：{_clean_text('、'.join(str(name) for name in history[-5:]), 120)}",
+        ])
+    for index, item in enumerate(aliased, start=1):
+        history = item.get("history") if isinstance(item.get("history"), list) else []
+        lines.extend([
+            "",
+            f"本地别名 #{index}",
+            f"类型：{_clean_text(item.get('kind'), 20)}",
+            f"标识：{_clean_text(item.get('uid'), 80)}",
+            f"本地别名：{_clean_text(item.get('alias'), 80)}",
+            f"历史名称：{_clean_text('、'.join(str(name) for name in history[-5:]), 120)}",
+        ])
+    if not unresolved and not aliased:
+        lines.extend(["", "当前没有未识别联系人。"])
+    lines.extend([
+        "",
+        "设置别名：/contact_alias <标识> <名称>",
+        "清除别名：/contact_alias <标识> -",
+    ])
+    return "\n".join(lines)
+
+
+def format_restore_rehearsal_status(state: dict) -> str:
+    if not isinstance(state, dict) or not state:
+        return "未检查"
+    status = str(state.get("status") or "").lower()
+    if status == "requested":
+        return "等待执行"
+    if status == "running":
+        return "执行中"
+    if status == "completed" and state.get("healthy"):
+        return f"通过（最近完成 {format_timestamp(state.get('completed_at'))}）"
+    if status in {"completed", "failed"}:
+        reason = _clean_text(state.get("reason") or "恢复演练未通过", 80)
+        return f"失败（{reason}）"
+    return "未检查"
+
+
+def request_restore_rehearsal(path: Path, now=None, requested_by=None) -> dict:
+    path = Path(path)
+    existing = load_json(path)
+    if existing.get("status") in {"requested", "running"}:
+        return existing
+    now = time.time() if now is None else float(now)
+    payload = {
+        "version": 1,
+        "request_id": f"restore-{int(now * 1000)}",
+        "status": "requested",
+        "requested_at": now,
+    }
+    if requested_by is not None:
+        payload["requested_by"] = int(requested_by)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=str(path.parent), prefix=f".{path.name}.", delete=False,
+        ) as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = handle.name
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+    return payload
 
 
 def runtime_version_text() -> str:
@@ -579,12 +721,24 @@ class OperationsUI:
         self._status_source_messages = {}
 
     @staticmethod
-    def markup(refresh: str = "", include_bridge: bool = False) -> InlineKeyboardMarkup:
+    def markup(
+        refresh: str = "",
+        include_bridge: bool = False,
+        detailed: bool = False,
+    ) -> InlineKeyboardMarkup:
         rows = []
         if include_bridge:
             rows.append([
+                InlineKeyboardButton(
+                    "精简状态" if detailed else "详细状态",
+                    callback_data="ops:status" if detailed else "ops:status-detail",
+                ),
                 InlineKeyboardButton("投递明细", callback_data="ops:delivery"),
                 InlineKeyboardButton("异常中心", callback_data="ops:errors"),
+            ])
+            rows.append([
+                InlineKeyboardButton("深度自检", callback_data="ops:selftest"),
+                InlineKeyboardButton("联系人中心", callback_data="ops:contacts"),
                 InlineKeyboardButton("失败诊断", callback_data="ops:diagnostic"),
             ])
             row = [InlineKeyboardButton("Bridge 队列", callback_data="bridgeq:home")]
@@ -592,7 +746,10 @@ class OperationsUI:
             if refresh:
                 row.append(InlineKeyboardButton("刷新", callback_data=f"ops:{refresh}"))
             rows.append(row)
-            rows.append([InlineKeyboardButton("关闭并删除", callback_data="ops:status-close")])
+            rows.append([
+                InlineKeyboardButton("恢复演练", callback_data="ops:restore-rehearsal"),
+                InlineKeyboardButton("关闭并删除", callback_data="ops:status-close"),
+            ])
         else:
             row = []
             if refresh:
@@ -611,8 +768,9 @@ class OperationsUI:
         refresh: str = "",
         include_bridge: bool = False,
         track_status_source: bool = False,
+        detailed: bool = False,
     ):
-        markup = self.markup(refresh, include_bridge=include_bridge)
+        markup = self.markup(refresh, include_bridge=include_bridge, detailed=detailed)
         if update.callback_query:
             result = update.callback_query.edit_message_text(text, reply_markup=markup)
         else:
@@ -1032,6 +1190,198 @@ class OperationsUI:
         except Exception as error:
             return f"不可用（{redact_error(error)}）"
 
+    def _compact_status_snapshot(self) -> dict:
+        state_root = self.data_root / "operations" / "state"
+        delivery = load_json(state_root / "delivery.json")
+        image = image_metadata(self.data_root)
+        health = load_json(state_root / "health-guard.json")
+        reconcile = load_json(self.data_root / "delivery-reconcile-latest.json")
+        backup_audit = load_json(self.data_root / "backup-audit-latest.json")
+        maintenance = load_json(state_root / "maintenance.json")
+        restore = load_json(state_root / "restore-rehearsal.json")
+        queue = delivery_summary(self.data_root, reconcile)
+        return {
+            "uptime": format_uptime(self.started_at),
+            "versions": runtime_version_text(),
+            "latest": format_latest_match(image),
+            "wechat": self._wechat_login(),
+            "bot_api": self._bot_api(),
+            "stack": "正常" if health.get("healthy") else health.get("reason", "等待检查"),
+            "queue": f"待处理 {queue['pending']}｜失败 {queue['failed']}",
+            "bridge": self._bridge_queue_summary(),
+            "latency": format_queue_latency(delivery),
+            "recovery": format_health_action(health.get("action")),
+            "backup": format_backup_verification(backup_audit),
+            "restore": format_restore_rehearsal_status(restore),
+            "maintenance": format_maintenance_status(maintenance),
+        }
+
+    def compact_health_text(self) -> str:
+        return format_compact_status(self._compact_status_snapshot())
+
+    def _selftest_checks(self) -> List[dict]:
+        checks = []
+
+        try:
+            login = self._wechat_login()
+            checks.append({
+                "name": "微信登录",
+                "status": "ok" if login == "已登录" else "failed",
+                "detail": login,
+            })
+        except Exception as error:
+            checks.append({"name": "微信登录", "status": "failed", "detail": redact_error(error)})
+
+        try:
+            bot_api = self._bot_api()
+            checks.append({
+                "name": "Telegram Bot API",
+                "status": "ok" if bot_api == "正常" else "failed",
+                "detail": bot_api,
+            })
+        except Exception as error:
+            checks.append({
+                "name": "Telegram Bot API",
+                "status": "failed",
+                "detail": redact_error(error),
+            })
+
+        bridge = getattr(getattr(self, "bridge_queue_ui", None), "client", None)
+        if bridge is None:
+            checks.append({"name": "Bridge 接口", "status": "unknown", "detail": "未配置"})
+        else:
+            try:
+                snapshot = bridge.health()
+                checks.append({
+                    "name": "Bridge 接口",
+                    "status": "ok" if snapshot.get("ok", True) is not False else "failed",
+                    "detail": "接口正常" if snapshot.get("ok", True) is not False else "接口返回异常",
+                })
+            except Exception as error:
+                checks.append({
+                    "name": "Bridge 接口",
+                    "status": "failed",
+                    "detail": redact_error(error),
+                })
+
+        state_root = self.data_root / "operations" / "state"
+        delivery_path = state_root / "delivery.json"
+        if delivery_path.is_file() and load_json(delivery_path):
+            checks.append({"name": "投递状态文件", "status": "ok", "detail": "可读"})
+        else:
+            checks.append({"name": "投递状态文件", "status": "unknown", "detail": "尚未生成"})
+
+        for label, filename in (
+            ("数据库审计", "database-audit-latest.json"),
+            ("备份校验", "backup-audit-latest.json"),
+        ):
+            report = load_json(self.data_root / filename)
+            if not report:
+                checks.append({"name": label, "status": "unknown", "detail": "未检查"})
+            else:
+                checks.append({
+                    "name": label,
+                    "status": "ok" if report.get("healthy") else "failed",
+                    "detail": format_audit_status(report),
+                })
+
+        failed_media = self.data_root / "operations" / "failed-media"
+        failed_count = delivery_summary(
+            self.data_root,
+            load_json(self.data_root / "delivery-reconcile-latest.json"),
+        )["persisted_failed_media"]
+        checks.append({
+            "name": "失败附件目录",
+            "status": "ok" if failed_count == 0 or failed_media.is_dir() else "failed",
+            "detail": "无待处理副本" if failed_count == 0 else f"可访问，{failed_count} 条",
+        })
+        return checks
+
+    @staticmethod
+    def contact_markup() -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("刷新联系人", callback_data="ops:contacts-refresh")],
+            [InlineKeyboardButton("关闭", callback_data="ops:close")],
+        ])
+
+    def _contact_snapshot(self, refresh: bool = False):
+        slave = self._comwechat_channel()
+        method_name = "refresh_contact_center" if refresh else "contact_center_snapshot"
+        method = getattr(slave, method_name, None) if slave is not None else None
+        if not callable(method):
+            return None
+        return method()
+
+    def contact_center(self, update: Update, _context: CallbackContext, refresh: bool = False):
+        if not self._allowed(update):
+            return
+        try:
+            snapshot = self._contact_snapshot(refresh=refresh)
+        except Exception as error:
+            self._render(
+                update,
+                "EFB 未识别联系人\n\n刷新失败：" + redact_error(error),
+                self.contact_markup(),
+            )
+            return
+        if snapshot is None:
+            text = "EFB 未识别联系人\n\n当前 ComWechat 版本不支持联系人中心。"
+        else:
+            text = format_contact_center(snapshot)
+        self._render(update, text, self.contact_markup())
+
+    def contacts(self, update: Update, context: CallbackContext):
+        self.contact_center(update, context)
+
+    def contact_alias(self, update: Update, context: CallbackContext):
+        if not self._allowed(update):
+            return
+        args = list(getattr(context, "args", None) or [])
+        if len(args) < 2:
+            self._render(
+                update,
+                "EFB 联系人别名\n\n用法：/contact_alias <标识> <名称>\n清除别名：/contact_alias <标识> -",
+                self.contact_markup(),
+            )
+            return
+        wxid = args[0]
+        try:
+            slave = self._comwechat_channel()
+            if args[1] == "-" and callable(getattr(slave, "clear_contact_alias", None)):
+                snapshot = slave.clear_contact_alias(wxid)
+                message = "已清除本地别名。"
+            elif callable(getattr(slave, "set_contact_alias", None)):
+                snapshot = slave.set_contact_alias(wxid, " ".join(args[1:]))
+                message = "已设置本地别名。"
+            else:
+                raise RuntimeError("当前 ComWechat 版本不支持联系人别名")
+        except Exception as error:
+            self._render(update, "EFB 联系人别名\n\n操作失败：" + redact_error(error), self.contact_markup())
+            return
+        self._render(update, "EFB 联系人别名\n\n" + message + "\n\n" + format_contact_center(snapshot), self.contact_markup())
+
+    def selftest(self, update: Update, _context: CallbackContext):
+        if self._allowed(update):
+            self._send(update, format_selftest_report(self._selftest_checks()), "selftest")
+
+    def restore_rehearsal(self, update: Update, _context: CallbackContext):
+        if not self._allowed(update):
+            return
+        state_path = self.data_root / "operations" / "state" / "restore-rehearsal-request.json"
+        state = request_restore_rehearsal(
+            state_path,
+            requested_by=getattr(update.effective_user, "id", None),
+        )
+        if state.get("status") == "requested":
+            text = (
+                "EFB 备份恢复演练\n\n"
+                "已提交只读演练请求。NAS 健康守护会在临时目录校验清单、SQLite 和加密归档，"
+                "不会覆盖生产配置。完成后刷新 /status 查看结果。"
+            )
+        else:
+            text = f"EFB 备份恢复演练\n\n当前状态：{format_restore_rehearsal_status(state)}。"
+        self._send(update, text, "status", include_bridge=True)
+
     def health_text(self) -> str:
         backup = backup_summary(self.data_root / "backups")
         state_root = self.data_root / "operations" / "state"
@@ -1045,6 +1395,7 @@ class OperationsUI:
         backup_audit = load_json(self.data_root / "backup-audit-latest.json")
         maintenance = load_json(state_root / "maintenance.json")
         manual_restart = load_json(state_root / "manual-restart.json")
+        restore_rehearsal = load_json(state_root / "restore-rehearsal.json")
         session_events = load_json(
             self.data_root
             / "profiles"
@@ -1146,6 +1497,7 @@ class OperationsUI:
             f"容量审计：{format_audit_status(capacity)}\n"
             f"上游审计：{format_audit_status(upstream)}\n"
             f"备份校验：{format_backup_verification(backup_audit)}\n"
+            f"恢复演练：{format_restore_rehearsal_status(restore_rehearsal)}\n"
             f"维护模式：{format_maintenance_status(maintenance)}\n"
             f"手动重启：{format_manual_restart(manual_restart)}\n"
             f"映射数据库：{database_status}\n"
@@ -1164,6 +1516,7 @@ class OperationsUI:
                 "status",
                 include_bridge=True,
                 track_status_source=True,
+                detailed=True,
             )
 
     def delivery_detail(self, update: Update, _context: CallbackContext):
@@ -1232,6 +1585,16 @@ class OperationsUI:
             update.effective_message.reply_photo(photo=photo, caption=caption)
 
     def status(self, update: Update, context: CallbackContext):
+        if self._allowed(update):
+            self._send(
+                update,
+                self.compact_health_text(),
+                "status",
+                include_bridge=True,
+                track_status_source=True,
+            )
+
+    def status_detail(self, update: Update, context: CallbackContext):
         self.health(update, context)
 
     def trace(self, update: Update, context: CallbackContext):
@@ -1357,10 +1720,17 @@ class OperationsUI:
         handlers = {
             "health": self.health,
             "status": self.status,
+            "status-detail": self.status_detail,
             "restart-all": self.restart_all,
             "delivery": self.delivery_detail,
             "errors": self.errors,
             "diagnostic": self.diagnostic,
+            "selftest": self.selftest,
+            "contacts": self.contacts,
+            "contacts-refresh": lambda current_update, current_context: self.contact_center(
+                current_update, current_context, refresh=True
+            ),
+            "restore-rehearsal": self.restore_rehearsal,
             "trace": self.trace,
             "backup": self.backup_info,
             "filetest": self.filetest,
