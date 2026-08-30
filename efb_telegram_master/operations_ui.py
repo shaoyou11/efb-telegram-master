@@ -73,7 +73,7 @@ def format_trace_report(bridge_records: list, telegram_records: list, trace_filt
 
 
 def format_issues_report(logged_in: bool, queue: dict, bridge: dict,
-                         audits: dict, mapping_ok: bool) -> str:
+                         audits: dict, mapping_ok: bool, delivery_stats: dict = None) -> str:
     issues = []
     if not logged_in:
         issues.append("- 微信未登录")
@@ -92,6 +92,18 @@ def format_issues_report(logged_in: bool, queue: dict, bridge: dict,
             issues.append(f"- {name}：{reason}")
     if not mapping_ok:
         issues.append("- 映射数据库异常")
+    failed_labels = {
+        "text": "文本", "image": "图片", "video": "视频", "file": "文件",
+        "public_account": "公众号", "finder": "视频号", "other": "其他",
+    }
+    by_type = (delivery_stats or {}).get("by_type") or {}
+    failed_types = [
+        f"{label} {int((by_type.get(key) or {}).get('failed', 0) or 0)}"
+        for key, label in failed_labels.items()
+        if int((by_type.get(key) or {}).get("failed", 0) or 0) > 0
+    ]
+    if failed_types:
+        issues.append("- 近24小时失败类型：" + "、".join(failed_types))
     if not issues:
         issues.append("当前没有发现需要处理的异常。")
     return "EFB 异常中心\n\n" + "\n".join(issues)
@@ -326,14 +338,45 @@ def format_delivery_stats(stats: dict) -> str:
         )
     except (TypeError, ValueError):
         average_text = "暂无"
-    return (
+    try:
+        p95 = stats.get("p95_latency_ms")
+        p95_text = "暂无" if p95 is None else (
+            f"{float(p95):.0f} 毫秒"
+            if float(p95) < 1000
+            else f"{float(p95) / 1000:.2f} 秒"
+        )
+    except (TypeError, ValueError):
+        p95_text = "暂无"
+    sections = [
         f"微信接收 {int(stats.get('inbound', 0) or 0)}｜"
         f"Telegram成功 {int(stats.get('delivered', 0) or 0)}｜"
         f"过滤 {int(stats.get('filtered', 0) or 0)}｜"
         f"静默 {int(stats.get('silent', 0) or 0)}｜"
         f"失败 {int(stats.get('failed', 0) or 0)}｜"
-        f"平均延迟 {average_text}"
-    )
+        f"平均延迟 {average_text}｜P95延迟 {p95_text}"
+    ]
+    labels = {
+        "text": "文本",
+        "image": "图片",
+        "video": "视频",
+        "file": "文件",
+        "public_account": "公众号",
+        "finder": "视频号",
+        "other": "其他",
+    }
+    by_type = stats.get("by_type") or {}
+    for key in labels:
+        item = by_type.get(key)
+        if not isinstance(item, dict) or not int(item.get("inbound", 0) or 0):
+            continue
+        sections.append(
+            f"{labels[key]} 收{int(item.get('inbound', 0) or 0)}/"
+            f"成{int(item.get('delivered', 0) or 0)}/"
+            f"滤{int(item.get('filtered', 0) or 0)}/"
+            f"默{int(item.get('silent', 0) or 0)}/"
+            f"败{int(item.get('failed', 0) or 0)}"
+        )
+    return "｜".join(sections)
 
 
 def format_backup_verification(report: dict) -> str:
@@ -1569,7 +1612,14 @@ class OperationsUI:
             logged_in = False
         self._send(
             update,
-            format_issues_report(logged_in, queue, bridge, audits, mapping_ok),
+            format_issues_report(
+                logged_in,
+                queue,
+                bridge,
+                audits,
+                mapping_ok,
+                delivery_stats_summary(state_root),
+            ),
             "errors",
         )
 

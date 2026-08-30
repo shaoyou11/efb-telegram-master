@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from pytest import fixture
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
-from ehforwarderbot import Message, Chat
+from ehforwarderbot import Message, Chat, MsgType
 from ehforwarderbot.types import ReactionName
 from efb_telegram_master.constants import Emoji
 from efb_telegram_master.delivery_policy import DeliveryPolicy
@@ -71,6 +71,29 @@ def test_delivery_policy_defaults_to_normal(channel, private):
     msg = build_dummy_message(private, private)
 
     assert channel.slave_messages.delivery_policy(msg) is DeliveryPolicy.NORMAL
+
+
+def test_delivery_message_type_distinguishes_public_account_and_finder():
+    public = SimpleNamespace(vendor_specific={"is_mp": True})
+    finder = SimpleNamespace(
+        type=MsgType.Video,
+        chat=SimpleNamespace(vendor_specific={}),
+        vendor_specific={"finder_feed_job_id": "opaque"},
+    )
+    article = SimpleNamespace(
+        type=MsgType.Link,
+        chat=public,
+        vendor_specific={},
+    )
+    image = SimpleNamespace(
+        type=MsgType.Image,
+        chat=SimpleNamespace(vendor_specific={}),
+        vendor_specific={},
+    )
+
+    assert SlaveMessageProcessor.delivery_message_type(article) == "public_account"
+    assert SlaveMessageProcessor.delivery_message_type(finder) == "finder"
+    assert SlaveMessageProcessor.delivery_message_type(image) == "image"
 
 
 def test_filtered_delivery_stops_before_destination_lookup(channel, private, monkeypatch):

@@ -86,7 +86,100 @@ def test_delivery_telemetry_persists_24_hour_aggregate_stats(tmp_path, monkeypat
         "failed": 1,
         "silent": 0,
         "average_latency_ms": 1167,
+        "p95_latency_ms": 2000,
+        "last_success_at": 100001.0,
+        "by_type": {
+            "file": {
+                "inbound": 1,
+                "delivered": 0,
+                "filtered": 0,
+                "failed": 1,
+                "silent": 0,
+                "average_latency_ms": 2000,
+                "p95_latency_ms": 2000,
+                "last_success_at": None,
+            },
+            "image": {
+                "inbound": 1,
+                "delivered": 1,
+                "filtered": 0,
+                "failed": 0,
+                "silent": 0,
+                "average_latency_ms": 1000,
+                "p95_latency_ms": 1000,
+                "last_success_at": 100001.0,
+            },
+            "text": {
+                "inbound": 1,
+                "delivered": 0,
+                "filtered": 1,
+                "failed": 0,
+                "silent": 0,
+                "average_latency_ms": 500,
+                "p95_latency_ms": 500,
+                "last_success_at": None,
+            },
+        },
     }
+
+
+def test_delivery_stats_records_type_p95_without_message_content(tmp_path, monkeypatch):
+    telemetry = DeliveryTelemetry(tmp_path / "delivery.json")
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 100.0)
+    telemetry.inbound("private-message-1", "MsgType.Image")
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 100.1)
+    telemetry.delivered("private-message-1")
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 101.0)
+    telemetry.inbound("private-message-2", "image")
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 101.3)
+    telemetry.delivered("private-message-2", silent=True)
+
+    summary = delivery_stats_summary(tmp_path, now=102.0)
+    serialized = (tmp_path / "delivery-stats.json").read_text(encoding="utf-8")
+
+    assert summary["by_type"]["image"]["p95_latency_ms"] == 300
+    assert summary["by_type"]["image"]["silent"] == 1
+    assert summary["p95_latency_ms"] == 300
+    assert "private-message" not in serialized
+    assert "正文" not in serialized
+
+
+def test_legacy_delivery_stats_remain_readable(tmp_path):
+    (tmp_path / "delivery-stats.json").write_text(json.dumps({
+        "version": 1,
+        "buckets": {
+            "3600": {
+                "inbound": 2,
+                "delivered": 1,
+                "latency_ms_total": 500,
+                "latency_count": 1,
+            },
+        },
+    }), encoding="utf-8")
+
+    summary = delivery_stats_summary(tmp_path, now=4000)
+
+    assert summary["inbound"] == 2
+    assert summary["average_latency_ms"] == 500
+    assert summary["p95_latency_ms"] is None
+    assert summary["by_type"] == {}
+
+
+def test_record_event_rejects_unknown_outcomes_and_persists_known_type(tmp_path):
+    telemetry = DeliveryTelemetry(tmp_path / "delivery.json")
+
+    telemetry.record_event("delivered", "video", latency_ms=250, now=100.0)
+    summary = delivery_stats_summary(tmp_path, now=101.0)
+
+    assert summary["delivered"] == 1
+    assert summary["by_type"]["video"]["delivered"] == 1
+    assert summary["by_type"]["video"]["p95_latency_ms"] == 250
+    try:
+        telemetry.record_event("unknown", "video", now=102.0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown delivery event must be rejected")
 
 
 def test_digest_delta_only_reports_new_silent_filtered_and_failed_counts():
