@@ -136,6 +136,7 @@ def test_delivery_stats_records_type_p95_without_message_content(tmp_path, monke
 
     summary = delivery_stats_summary(tmp_path, now=102.0)
     serialized = (tmp_path / "delivery-stats.json").read_text(encoding="utf-8")
+    serialized += (tmp_path / "delivery-events.jsonl").read_text(encoding="utf-8")
 
     assert summary["by_type"]["image"]["p95_latency_ms"] == 300
     assert summary["by_type"]["image"]["silent"] == 1
@@ -245,10 +246,26 @@ def test_delivery_stats_do_not_drop_events_during_busy_hour(tmp_path):
     for index in range(10001):
         telemetry._record_stat("delivered", 3600.0 + index / 10, 10, "text")
 
-    bucket = telemetry.stats["buckets"]["3600"]
+    lines = telemetry.events_path.read_text(encoding="utf-8").splitlines()
 
-    assert bucket["events_complete"] is True
-    assert len(bucket["events"]) == 10001
+    assert len(lines) == 10001
+    assert telemetry.events_path.stat().st_size < 1024 * 1024
+    assert "private-message" not in lines[0]
+    telemetry._save_stats()
+    assert telemetry.stats_path.stat().st_size < 256 * 1024
+
+
+def test_delivery_event_log_compacts_to_configured_size(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "efb_telegram_master.delivery_telemetry.EVENT_LOG_MAX_BYTES", 1024
+    )
+    telemetry = DeliveryTelemetry(tmp_path / "delivery.json")
+    for index in range(100):
+        telemetry._record_stat("delivered", float(index), 10, "text")
+    telemetry._record_stat("delivered", 3600.0, 10, "text")
+
+    assert telemetry.events_path.stat().st_size <= 1024
+    assert telemetry.stats["events_complete_from"] > 0
 
 
 def test_failure_reason_is_redacted():

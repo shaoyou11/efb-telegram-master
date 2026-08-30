@@ -17,6 +17,7 @@ STATS_RETENTION_SECONDS = 3 * 24 * 60 * 60
 TRACE_RETENTION_SECONDS = 24 * 60 * 60
 TRACE_LIMIT = 100
 LATENCY_SAMPLE_LIMIT = 1000
+EVENT_LOG_MAX_BYTES = 64 * 1024 * 1024
 MESSAGE_TYPE_KEYS = (
     "text", "image", "video", "file", "public_account", "finder", "other",
 )
@@ -63,6 +64,7 @@ class DeliveryTelemetry:
     def __init__(self, path: Path, stats_path: Path = None, trace_path: Path = None):
         self.path = Path(path)
         self.stats_path = Path(stats_path) if stats_path else self.path.with_name("delivery-stats.json")
+        self.events_path = self.stats_path.with_name("delivery-events.jsonl")
         self.lock = threading.Lock()
         self.state = self._load()
         if self.state.get("pending") is not None:
@@ -98,10 +100,20 @@ class DeliveryTelemetry:
                     for key, value in data["buckets"].items()
                     if _valid_bucket_key(key) and isinstance(value, dict)
                 }
-                return {"version": 3, "buckets": buckets}
+                return {
+                    "version": 3,
+                    "buckets": buckets,
+                    "events_complete_from": data.get("events_complete_from"),
+                    "last_event_compaction_hour": data.get("last_event_compaction_hour"),
+                }
         except (OSError, ValueError, TypeError):
             pass
-        return {"version": 3, "buckets": {}}
+        return {
+            "version": 3,
+            "buckets": {},
+            "events_complete_from": None,
+            "last_event_compaction_hour": None,
+        }
 
     def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -214,12 +226,79 @@ class DeliveryTelemetry:
         samples.append(round(latency))
         target["latency_samples_ms"] = samples[-LATENCY_SAMPLE_LIMIT:]
 
+    def _append_event(self, event: dict) -> None:
+        self.events_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.events_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")))
+            handle.write("\n")
+
+        event_at = float(event["at"])
+        if self.stats.get("events_complete_from") is None:
+            self.stats["events_complete_from"] = event_at
+        hour = int(event_at // 3600)
+        previous_hour = self.stats.get("last_event_compaction_hour")
+        self.stats["last_event_compaction_hour"] = hour
+        if previous_hour is not None and previous_hour != hour:
+            self._compact_events(event_at)
+
+    def _compact_events(self, now: float) -> None:
+        cutoff = float(now) - STATS_RETENTION_SECONDS
+        retained = []
+        try:
+            lines = self.events_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+        for line in lines:
+            try:
+                event = json.loads(line)
+                event_at = float(event.get("at"))
+            except (ValueError, TypeError):
+                continue
+            if event_at >= cutoff:
+                retained.append((event_at, event))
+        retained.sort(key=lambda item: item[0])
+
+        encoded = [
+            json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+            for _, event in retained
+        ]
+        total_size = sum(len(item.encode("utf-8")) for item in encoded)
+        removed_until = cutoff
+        trimmed_for_size = False
+        while encoded and total_size > EVENT_LOG_MAX_BYTES:
+            trimmed_for_size = True
+            removed_until = max(removed_until, retained[0][0])
+            total_size -= len(encoded[0].encode("utf-8"))
+            encoded.pop(0)
+            retained.pop(0)
+        if trimmed_for_size:
+            removed_until = retained[0][0] if retained else float(now)
+
+        current_coverage = self.stats.get("events_complete_from")
+        try:
+            current_coverage = float(current_coverage)
+        except (TypeError, ValueError):
+            current_coverage = float(now)
+        self.stats["events_complete_from"] = max(current_coverage, removed_until)
+
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=str(self.events_path.parent),
+            prefix=".delivery-events.",
+            delete=False,
+        ) as handle:
+            handle.writelines(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = handle.name
+        os.replace(temporary, self.events_path)
+
     def _record_stat(self, field: str, now: float, latency_ms=None,
                      message_type: str = "other"):
         buckets = self.stats.setdefault("buckets", {})
         key = self._bucket_key(now)
         bucket = buckets.get(key)
-        new_bucket = not isinstance(bucket, dict)
         if not isinstance(bucket, dict):
             bucket = {
                 "inbound": 0,
@@ -232,8 +311,6 @@ class DeliveryTelemetry:
                 "latency_samples_ms": [],
                 "last_success_at": None,
                 "by_type": {},
-                "events": [],
-                "events_complete": True,
             }
             buckets[key] = bucket
         self._increment(bucket, field)
@@ -250,10 +327,6 @@ class DeliveryTelemetry:
         if field == "delivered":
             bucket["last_success_at"] = float(now)
             typed["last_success_at"] = float(now)
-        events = bucket.get("events")
-        if not isinstance(events, list):
-            events = []
-            bucket["events_complete"] = bool(new_bucket)
         event = {
             "at": float(now),
             "event": field,
@@ -264,8 +337,7 @@ class DeliveryTelemetry:
                 event["latency_ms"] = round(max(0.0, float(latency_ms)))
             except (TypeError, ValueError):
                 pass
-        events.append(event)
-        bucket["events"] = events
+        self._append_event(event)
         cutoff = float(now) - STATS_RETENTION_SECONDS
         self.stats["buckets"] = {
             bucket_key: value
@@ -406,53 +478,70 @@ def delivery_stats_summary(state_root: Path, now=None) -> dict:
     latency_count = 0
     latency_samples = []
     typed_totals = {}
-    for key, bucket in (data.get("buckets") or {}).items():
+
+    def apply_event(event: dict) -> None:
+        nonlocal latency_total, latency_count
+        if not isinstance(event, dict):
+            return
+        try:
+            event_at = float(event.get("at"))
+        except (TypeError, ValueError):
+            return
+        if event_at < cutoff or event_at > now:
+            return
+        field = str(event.get("event") or "")
+        if field not in {"inbound", "delivered", "filtered", "failed", "silent"}:
+            return
+        category = normalize_message_type(event.get("type"))
+        aggregate = typed_totals.setdefault(category, {
+            **_empty_type_summary(),
+            "latency_ms_total": 0.0,
+            "latency_count": 0,
+            "latency_samples_ms": [],
+        })
+        result[field] += 1
+        aggregate[field] += 1
+        try:
+            latency = max(0.0, float(event.get("latency_ms")))
+        except (TypeError, ValueError):
+            latency = None
+        if latency is not None:
+            latency_total += latency
+            latency_count += 1
+            latency_samples.append(latency)
+            aggregate["latency_ms_total"] += latency
+            aggregate["latency_count"] += 1
+            aggregate["latency_samples_ms"].append(latency)
+        if field == "delivered":
+            result["last_success_at"] = max(
+                float(result.get("last_success_at") or 0), event_at
+            )
+            aggregate["last_success_at"] = max(
+                float(aggregate.get("last_success_at") or 0), event_at
+            )
+
+    events_path = Path(state_root) / "delivery-events.jsonl"
+    try:
+        coverage = float(data.get("events_complete_from"))
+    except (TypeError, ValueError):
+        coverage = None
+    use_event_log = bool(coverage is not None and coverage <= cutoff and events_path.exists())
+    if use_event_log:
+        try:
+            for line in events_path.read_text(encoding="utf-8").splitlines():
+                try:
+                    apply_event(json.loads(line))
+                except (ValueError, TypeError):
+                    continue
+        except OSError:
+            use_event_log = False
+
+    buckets = {} if use_event_log else (data.get("buckets") or {})
+    for key, bucket in buckets.items():
         if not _valid_bucket_key(key) or not isinstance(bucket, dict):
             continue
         bucket_time = float(key)
         if bucket_time + 3600 < cutoff or bucket_time > now:
-            continue
-        events = bucket.get("events")
-        if bucket.get("events_complete") is True and isinstance(events, list):
-            for event in events:
-                if not isinstance(event, dict):
-                    continue
-                try:
-                    event_at = float(event.get("at"))
-                except (TypeError, ValueError):
-                    continue
-                if event_at < cutoff or event_at > now:
-                    continue
-                field = str(event.get("event") or "")
-                if field not in {"inbound", "delivered", "filtered", "failed", "silent"}:
-                    continue
-                category = normalize_message_type(event.get("type"))
-                aggregate = typed_totals.setdefault(category, {
-                    **_empty_type_summary(),
-                    "latency_ms_total": 0.0,
-                    "latency_count": 0,
-                    "latency_samples_ms": [],
-                })
-                result[field] += 1
-                aggregate[field] += 1
-                try:
-                    latency = max(0.0, float(event.get("latency_ms")))
-                except (TypeError, ValueError):
-                    latency = None
-                if latency is not None:
-                    latency_total += latency
-                    latency_count += 1
-                    latency_samples.append(latency)
-                    aggregate["latency_ms_total"] += latency
-                    aggregate["latency_count"] += 1
-                    aggregate["latency_samples_ms"].append(latency)
-                if field == "delivered":
-                    result["last_success_at"] = max(
-                        float(result.get("last_success_at") or 0), event_at
-                    )
-                    aggregate["last_success_at"] = max(
-                        float(aggregate.get("last_success_at") or 0), event_at
-                    )
             continue
         for field in ("inbound", "delivered", "filtered", "failed", "silent"):
             try:
