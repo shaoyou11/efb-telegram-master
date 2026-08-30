@@ -78,7 +78,10 @@ def test_delivery_message_type_distinguishes_public_account_and_finder():
     finder = SimpleNamespace(
         type=MsgType.Video,
         chat=SimpleNamespace(vendor_specific={}),
-        vendor_specific={"finder_feed_job_id": "opaque"},
+        vendor_specific={
+            "wx_xml": "<msg><appmsg><finderFeed><objectId>1</objectId></finderFeed></appmsg></msg>",
+            "comwechat_info": {"type": 49},
+        },
     )
     article = SimpleNamespace(
         type=MsgType.Link,

@@ -466,6 +466,7 @@ def test_status_markup_exposes_compact_detail_and_new_operations():
 
 
 def test_delivery_stats_format_is_content_free():
+    last_success = format_timestamp(1000)
     assert format_delivery_stats({
         "inbound": 2,
         "delivered": 1,
@@ -473,6 +474,7 @@ def test_delivery_stats_format_is_content_free():
         "failed": 1,
         "average_latency_ms": 850,
         "p95_latency_ms": 1200,
+        "last_success_at": 1000,
         "by_type": {
             "text": {
                 "inbound": 2,
@@ -480,12 +482,15 @@ def test_delivery_stats_format_is_content_free():
                 "filtered": 0,
                 "silent": 0,
                 "failed": 1,
+                "average_latency_ms": 850,
+                "p95_latency_ms": 1200,
+                "last_success_at": 1000,
             },
         },
     }) == (
         "微信接收 2｜Telegram成功 1｜过滤 0｜静默 0｜失败 1｜"
-        "平均延迟 850 毫秒｜P95延迟 1.20 秒｜"
-        "文本 收2/成1/滤0/默0/败1"
+        f"平均延迟 850 毫秒｜P95延迟 1.20 秒｜最近成功 {last_success}｜"
+        f"文本 收2/成1/滤0/默0/败1/均850 毫秒/P95 1.20 秒/最近{last_success}"
     )
 
 

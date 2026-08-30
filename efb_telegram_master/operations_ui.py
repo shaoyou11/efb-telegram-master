@@ -329,24 +329,21 @@ def format_audit_status(report: dict) -> str:
 def format_delivery_stats(stats: dict) -> str:
     if not isinstance(stats, dict):
         stats = {}
-    try:
-        average = stats.get("average_latency_ms")
-        average_text = "暂无" if average is None else (
-            f"{float(average):.0f} 毫秒"
-            if float(average) < 1000
-            else f"{float(average) / 1000:.2f} 秒"
-        )
-    except (TypeError, ValueError):
-        average_text = "暂无"
-    try:
-        p95 = stats.get("p95_latency_ms")
-        p95_text = "暂无" if p95 is None else (
-            f"{float(p95):.0f} 毫秒"
-            if float(p95) < 1000
-            else f"{float(p95) / 1000:.2f} 秒"
-        )
-    except (TypeError, ValueError):
-        p95_text = "暂无"
+    def latency_text(value) -> str:
+        try:
+            if value is None:
+                return "暂无"
+            latency = float(value)
+            return (
+                f"{latency:.0f} 毫秒"
+                if latency < 1000
+                else f"{latency / 1000:.2f} 秒"
+            )
+        except (TypeError, ValueError):
+            return "暂无"
+
+    average_text = latency_text(stats.get("average_latency_ms"))
+    p95_text = latency_text(stats.get("p95_latency_ms"))
     sections = [
         f"微信接收 {int(stats.get('inbound', 0) or 0)}｜"
         f"Telegram成功 {int(stats.get('delivered', 0) or 0)}｜"
@@ -355,6 +352,8 @@ def format_delivery_stats(stats: dict) -> str:
         f"失败 {int(stats.get('failed', 0) or 0)}｜"
         f"平均延迟 {average_text}｜P95延迟 {p95_text}"
     ]
+    if stats.get("last_success_at"):
+        sections.append(f"最近成功 {format_timestamp(stats.get('last_success_at'))}")
     labels = {
         "text": "文本",
         "image": "图片",
@@ -369,13 +368,20 @@ def format_delivery_stats(stats: dict) -> str:
         item = by_type.get(key)
         if not isinstance(item, dict) or not int(item.get("inbound", 0) or 0):
             continue
-        sections.append(
+        detail = (
             f"{labels[key]} 收{int(item.get('inbound', 0) or 0)}/"
             f"成{int(item.get('delivered', 0) or 0)}/"
             f"滤{int(item.get('filtered', 0) or 0)}/"
             f"默{int(item.get('silent', 0) or 0)}/"
             f"败{int(item.get('failed', 0) or 0)}"
         )
+        detail += (
+            f"/均{latency_text(item.get('average_latency_ms'))}"
+            f"/P95 {latency_text(item.get('p95_latency_ms'))}"
+        )
+        if item.get("last_success_at"):
+            detail += f"/最近{format_timestamp(item.get('last_success_at'))}"
+        sections.append(detail)
     return "｜".join(sections)
 
 

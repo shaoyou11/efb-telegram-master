@@ -227,6 +227,19 @@ def test_delivery_stats_ignore_buckets_older_than_24_hours(tmp_path, monkeypatch
     assert result["average_latency_ms"] is None
 
 
+def test_delivery_stats_apply_exact_24_hour_cutoff_inside_hour_bucket(tmp_path):
+    telemetry = DeliveryTelemetry(tmp_path / "delivery.json")
+    telemetry.record_event("delivered", "text", latency_ms=100, now=3600.0)
+    telemetry.record_event("delivered", "image", latency_ms=300, now=3602.0)
+
+    result = delivery_stats_summary(tmp_path, now=3601.0 + 24 * 60 * 60)
+
+    assert result["delivered"] == 1
+    assert "text" not in result["by_type"]
+    assert result["by_type"]["image"]["delivered"] == 1
+    assert result["average_latency_ms"] == 300
+
+
 def test_failure_reason_is_redacted():
     result = sanitize_failure("https://host/bot123:secret/send failed at /private/file.jpg")
     assert "secret" not in result

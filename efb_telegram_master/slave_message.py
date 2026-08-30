@@ -78,11 +78,10 @@ class SlaveMessageProcessor(LocaleMixin):
     @staticmethod
     def delivery_message_type(msg: Message) -> str:
         vendor_specific = getattr(msg, "vendor_specific", {})
-        if isinstance(vendor_specific, dict) and any(
-            "finder" in str(key).lower() and bool(value)
-            for key, value in vendor_specific.items()
-        ):
-            return "finder"
+        if isinstance(vendor_specific, dict):
+            wx_xml = str(vendor_specific.get("wx_xml") or "").lower()
+            if "<finderfeed" in wx_xml or "<finder_feed" in wx_xml:
+                return "finder"
         chat_vendor = getattr(getattr(msg, "chat", None), "vendor_specific", {})
         if isinstance(chat_vendor, dict) and bool(chat_vendor.get("is_mp")):
             return "public_account"
