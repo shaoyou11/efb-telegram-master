@@ -41,7 +41,7 @@ from .chat_title_sync import should_auto_rename
 from .commands import ETMCommandMsgStorage
 from .constants import Emoji
 from .delivery_policy import DeliveryPolicy
-from .delivery_telemetry import DeliveryTelemetry, sanitize_failure
+from .delivery_telemetry import DeliveryTelemetry, normalize_message_type, sanitize_failure
 from .failed_delivery import FailedDeliveryStore
 from .failed_media import cleanup_failed_media, persist_failed_media
 from .file_size_policy import exceeds_bot_api_limit
@@ -74,6 +74,18 @@ class SlaveMessageProcessor(LocaleMixin):
         if isinstance(vendor_specific, dict):
             return str(vendor_specific.get("bridge_trace_id") or "")[:12]
         return ""
+
+    @staticmethod
+    def delivery_message_type(msg: Message) -> str:
+        vendor_specific = getattr(msg, "vendor_specific", {})
+        if isinstance(vendor_specific, dict):
+            wx_xml = str(vendor_specific.get("wx_xml") or "").lower()
+            if "<finderfeed" in wx_xml or "<finder_feed" in wx_xml:
+                return "finder"
+        chat_vendor = getattr(getattr(msg, "chat", None), "vendor_specific", {})
+        if isinstance(chat_vendor, dict) and bool(chat_vendor.get("is_mp")):
+            return "public_account"
+        return normalize_message_type(str(getattr(msg, "type", "")))
 
     def __init__(self, channel: 'TelegramChannel'):
         self.channel: 'TelegramChannel' = channel
@@ -220,7 +232,9 @@ class SlaveMessageProcessor(LocaleMixin):
             except OSError:
                 pass
         trace_id = self.delivery_trace_id(msg)
-        self.telemetry.inbound(str(msg.uid), str(msg.type), size, trace_id)
+        self.telemetry.inbound(
+            str(msg.uid), self.delivery_message_type(msg), size, trace_id,
+        )
         try:
             xid = msg.uid
             self.logger.debug("[%s] Slave message delivered to ETM.\n%s", xid, msg)

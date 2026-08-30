@@ -66,6 +66,7 @@ def test_issues_report_only_lists_actionable_failures():
         bridge={"dead_letter_size": 3},
         audits={"数据库": {"healthy": True}, "容量": {"healthy": False, "reason": "low disk"}},
         mapping_ok=False,
+        delivery_stats={"by_type": {"image": {"failed": 2}}},
     )
     assert "微信未登录" in text
     assert "待处理 2" in text
@@ -73,6 +74,7 @@ def test_issues_report_only_lists_actionable_failures():
     assert "容量" in text
     assert "- 数据库：" not in text
     assert "映射数据库异常" in text
+    assert "近24小时失败类型：图片 2" in text
 
 
 def test_format_uptime_formats_process_runtime():
@@ -464,13 +466,51 @@ def test_status_markup_exposes_compact_detail_and_new_operations():
 
 
 def test_delivery_stats_format_is_content_free():
+    last_success = format_timestamp(1000)
     assert format_delivery_stats({
         "inbound": 2,
         "delivered": 1,
         "filtered": 0,
         "failed": 1,
         "average_latency_ms": 850,
-    }) == "微信接收 2｜Telegram成功 1｜过滤 0｜静默 0｜失败 1｜平均延迟 850 毫秒"
+        "p95_latency_ms": 1200,
+        "last_success_at": 1000,
+        "by_type": {
+            "text": {
+                "inbound": 2,
+                "delivered": 1,
+                "filtered": 0,
+                "silent": 0,
+                "failed": 1,
+                "average_latency_ms": 850,
+                "p95_latency_ms": 1200,
+                "last_success_at": 1000,
+            },
+        },
+    }) == (
+        "微信接收 2｜Telegram成功 1｜过滤 0｜静默 0｜失败 1｜"
+        f"平均延迟 850 毫秒｜P95延迟 1.20 秒｜最近成功 {last_success}｜"
+        f"文本 收2/成1/滤0/默0/败1/均850 毫秒/P95 1.20 秒/最近{last_success}"
+    )
+
+
+def test_delivery_stats_format_shows_completion_only_type_and_missing_success():
+    assert format_delivery_stats({
+        "delivered": 1,
+        "by_type": {
+            "image": {
+                "inbound": 0,
+                "delivered": 1,
+                "filtered": 0,
+                "silent": 0,
+                "failed": 0,
+            },
+        },
+    }) == (
+        "微信接收 0｜Telegram成功 1｜过滤 0｜静默 0｜失败 0｜"
+        "平均延迟 暂无｜P95延迟 暂无｜最近成功 暂无｜"
+        "图片 收0/成1/滤0/默0/败0/均暂无/P95 暂无/最近暂无"
+    )
 
 
 def test_backup_verification_format_reports_read_only_checks():
