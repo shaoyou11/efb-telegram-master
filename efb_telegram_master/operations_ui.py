@@ -352,8 +352,7 @@ def format_delivery_stats(stats: dict) -> str:
         f"失败 {int(stats.get('failed', 0) or 0)}｜"
         f"平均延迟 {average_text}｜P95延迟 {p95_text}"
     ]
-    if stats.get("last_success_at"):
-        sections.append(f"最近成功 {format_timestamp(stats.get('last_success_at'))}")
+    sections.append(f"最近成功 {format_timestamp(stats.get('last_success_at'))}")
     labels = {
         "text": "文本",
         "image": "图片",
@@ -366,7 +365,10 @@ def format_delivery_stats(stats: dict) -> str:
     by_type = stats.get("by_type") or {}
     for key in labels:
         item = by_type.get(key)
-        if not isinstance(item, dict) or not int(item.get("inbound", 0) or 0):
+        if not isinstance(item, dict) or not any(
+            int(item.get(field, 0) or 0)
+            for field in ("inbound", "delivered", "filtered", "silent", "failed")
+        ):
             continue
         detail = (
             f"{labels[key]} 收{int(item.get('inbound', 0) or 0)}/"
@@ -379,8 +381,7 @@ def format_delivery_stats(stats: dict) -> str:
             f"/均{latency_text(item.get('average_latency_ms'))}"
             f"/P95 {latency_text(item.get('p95_latency_ms'))}"
         )
-        if item.get("last_success_at"):
-            detail += f"/最近{format_timestamp(item.get('last_success_at'))}"
+        detail += f"/最近{format_timestamp(item.get('last_success_at'))}"
         sections.append(detail)
     return "｜".join(sections)
 

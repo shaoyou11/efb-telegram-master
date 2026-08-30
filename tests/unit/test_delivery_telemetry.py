@@ -240,6 +240,17 @@ def test_delivery_stats_apply_exact_24_hour_cutoff_inside_hour_bucket(tmp_path):
     assert result["average_latency_ms"] == 300
 
 
+def test_delivery_stats_do_not_drop_events_during_busy_hour(tmp_path):
+    telemetry = DeliveryTelemetry(tmp_path / "delivery.json")
+    for index in range(10001):
+        telemetry._record_stat("delivered", 3600.0 + index / 10, 10, "text")
+
+    bucket = telemetry.stats["buckets"]["3600"]
+
+    assert bucket["events_complete"] is True
+    assert len(bucket["events"]) == 10001
+
+
 def test_failure_reason_is_redacted():
     result = sanitize_failure("https://host/bot123:secret/send failed at /private/file.jpg")
     assert "secret" not in result

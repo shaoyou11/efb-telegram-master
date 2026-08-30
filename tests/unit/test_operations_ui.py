@@ -494,6 +494,25 @@ def test_delivery_stats_format_is_content_free():
     )
 
 
+def test_delivery_stats_format_shows_completion_only_type_and_missing_success():
+    assert format_delivery_stats({
+        "delivered": 1,
+        "by_type": {
+            "image": {
+                "inbound": 0,
+                "delivered": 1,
+                "filtered": 0,
+                "silent": 0,
+                "failed": 0,
+            },
+        },
+    }) == (
+        "微信接收 0｜Telegram成功 1｜过滤 0｜静默 0｜失败 0｜"
+        "平均延迟 暂无｜P95延迟 暂无｜最近成功 暂无｜"
+        "图片 收0/成1/滤0/默0/败0/均暂无/P95 暂无/最近暂无"
+    )
+
+
 def test_backup_verification_format_reports_read_only_checks():
     text = format_backup_verification({
         "healthy": True,

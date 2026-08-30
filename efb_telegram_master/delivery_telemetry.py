@@ -17,7 +17,6 @@ STATS_RETENTION_SECONDS = 3 * 24 * 60 * 60
 TRACE_RETENTION_SECONDS = 24 * 60 * 60
 TRACE_LIMIT = 100
 LATENCY_SAMPLE_LIMIT = 1000
-EVENT_SAMPLE_LIMIT = 10000
 MESSAGE_TYPE_KEYS = (
     "text", "image", "video", "file", "public_account", "finder", "other",
 )
@@ -266,9 +265,6 @@ class DeliveryTelemetry:
             except (TypeError, ValueError):
                 pass
         events.append(event)
-        if len(events) > EVENT_SAMPLE_LIMIT:
-            events = events[-EVENT_SAMPLE_LIMIT:]
-            bucket["events_complete"] = False
         bucket["events"] = events
         cutoff = float(now) - STATS_RETENTION_SECONDS
         self.stats["buckets"] = {
