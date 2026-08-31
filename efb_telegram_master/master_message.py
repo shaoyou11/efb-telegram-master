@@ -455,6 +455,8 @@ class MasterMessageProcessor(LocaleMixin):
                 m.uid = slave_msg.uid
             else:
                 m.uid = None
+            if quote:
+                self.channel.wechat_read_ui.mark_destination_read(destination)
         except EFBChatNotFound as e:
             self.bot.reply_error(update, e.args[0] or self._("Chat is not found."))
         except EFBMessageTypeNotSupported as e:

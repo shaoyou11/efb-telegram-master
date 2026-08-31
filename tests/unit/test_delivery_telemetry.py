@@ -290,6 +290,8 @@ def test_delivery_trace_keeps_sanitized_recent_stages(tmp_path, monkeypatch):
     monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 100.0)
     telemetry = DeliveryTelemetry(tmp_path / "delivery.json")
     telemetry.inbound("private-message-id", "Image", 20)
+    monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 100.5)
+    telemetry.sending("private-message-id")
     monkeypatch.setattr("efb_telegram_master.delivery_telemetry.time.time", lambda: 101.0)
     telemetry.delivered("private-message-id")
 
@@ -299,6 +301,11 @@ def test_delivery_trace_keeps_sanitized_recent_stages(tmp_path, monkeypatch):
     assert traces[0]["stage"] == "delivered"
     assert traces[0]["trace_id"] != "private-message-id"
     assert "uid" not in traces[0]
+    assert traces[0]["trace_timestamps"] == {
+        "efb_received": 100.0,
+        "telegram_sent": 100.5,
+        "telegram_ack": 101.0,
+    }
 
 
 def test_logged_out_wechat_never_restarts_stalled_delivery():

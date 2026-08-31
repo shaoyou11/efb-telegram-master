@@ -290,6 +290,7 @@ class SlaveMessageProcessor(LocaleMixin):
                                      'but it does not exist in database. Sending new message instead.',
                                      msg.uid)
 
+            self.telemetry.sending(str(msg.uid), trace_id)
             self.dispatch_with_retry(
                 msg=msg,
                 msg_template=msg_template,
@@ -519,6 +520,9 @@ class SlaveMessageProcessor(LocaleMixin):
             for idx, i in enumerate(commands):
                 buttons.append([InlineKeyboardButton(i.name, callback_data=str(idx))])
             reply_markup = InlineKeyboardMarkup(buttons)
+
+        if self.channel.wechat_read_ui.should_offer(msg):
+            reply_markup = self.channel.wechat_read_ui.add_button(reply_markup)
 
         reactions = self.build_reactions_footer(msg.reactions)
 
