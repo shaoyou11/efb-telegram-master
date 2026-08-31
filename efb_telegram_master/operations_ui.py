@@ -25,6 +25,33 @@ URL = re.compile(r"https?://[^\s]+")
 DELIVERY_PAGE_SIZE = 5
 RECONCILE_MAX_AGE_SECONDS = 3 * 60 * 60
 SHANGHAI_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+TRACE_STAGE_ORDER = (
+    ("bridge_enqueued", "入队"),
+    ("attachment_ready", "附件就绪"),
+    ("efb_received", "EFB 接收"),
+    ("telegram_sent", "开始发送"),
+    ("telegram_ack", "Telegram 确认"),
+)
+
+
+def format_trace_durations(timestamps: dict) -> str:
+    values = []
+    for key, label in TRACE_STAGE_ORDER:
+        value = (timestamps or {}).get(key)
+        try:
+            timestamp = float(value)
+        except (TypeError, ValueError):
+            timestamp = None
+        values.append((label, timestamp))
+    durations = []
+    for (start_label, start), (end_label, end) in zip(values, values[1:]):
+        if start is None or end is None:
+            durations.append(f"{start_label}→{end_label} 未提供")
+        elif end < start:
+            durations.append(f"{start_label}→{end_label} 时间异常")
+        else:
+            durations.append(f"{start_label}→{end_label} {end - start:.2f}秒")
+    return "｜".join(durations)
 
 
 def format_trace_report(bridge_records: list, telegram_records: list, trace_filter: str = "") -> str:
@@ -65,9 +92,12 @@ def format_trace_report(bridge_records: list, telegram_records: list, trace_filt
         bridge_text = bridge_stages.get(bridge.get("state"), str(bridge.get("state") or "暂无"))
         telegram_text = telegram_stages.get(telegram.get("stage"), str(telegram.get("stage") or "暂无"))
         message_type = str(telegram.get("type") or "未知")
+        trace_timestamps = dict(bridge.get("trace_timestamps") or {})
+        trace_timestamps.update(telegram.get("trace_timestamps") or {})
         lines.append(
             f"{trace_id} · {message_type}\n"
-            f"Bridge {bridge_text} · Telegram {telegram_text}"
+            f"Bridge {bridge_text} · Telegram {telegram_text}\n"
+            f"{format_trace_durations(trace_timestamps)}"
         )
     return "\n\n".join(lines)
 
@@ -176,6 +206,44 @@ def _package_version(name: str) -> str:
         return metadata.version(name)
     except metadata.PackageNotFoundError:
         return "未知"
+
+
+def _revision_text(value) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"unknown", "none", "null"}:
+        return "未提供"
+    return text[:12]
+
+
+def format_component_versions(image: dict, bridge: dict) -> str:
+    efb_build = format_image_build_time((image or {}).get("build_time"))
+    efb_match = format_latest_match(image).split("（", 1)[0]
+    bridge_build = format_image_build_time((bridge or {}).get("build_time"))
+    rows = (
+        ("EFB", _package_version("ehforwarderbot"),
+         os.getenv("EFB_CORE_REVISION"), efb_build, efb_match),
+        ("Telegram Master", _package_version("efb-telegram-master"),
+         os.getenv("EFB_TELEGRAM_MASTER_REVISION"), efb_build, efb_match),
+        ("ComWechat Slave", _package_version("efb-wechat-comwechat-slave"),
+         os.getenv("EFB_COMWECHAT_SLAVE_REVISION"), efb_build, efb_match),
+        ("HTTP Client", _package_version("python-comwechatrobot-http"),
+         os.getenv("EFB_COMWECHAT_HTTP_REVISION"), efb_build, efb_match),
+        ("ComWechat", str((bridge or {}).get("comwechat_version") or "未提供"),
+         (bridge or {}).get("revision"), bridge_build,
+         os.getenv("COMWECHAT_GHCR_MATCH", "未校验")),
+        ("Bot API", os.getenv("TELEGRAM_BOT_API_VERSION", "未提供"),
+         os.getenv("TELEGRAM_BOT_API_REVISION"),
+         os.getenv("TELEGRAM_BOT_API_BUILD_TIME", "未提供"),
+         os.getenv("TELEGRAM_BOT_API_GHCR_MATCH", "未校验")),
+        ("Watchdog", os.getenv("EFB_WATCHDOG_VERSION", "未提供"),
+         os.getenv("EFB_WATCHDOG_REVISION"),
+         os.getenv("EFB_WATCHDOG_BUILD_TIME", "未提供"),
+         os.getenv("EFB_WATCHDOG_GHCR_MATCH", "未校验")),
+    )
+    return "\n".join(
+        f"  {name}: {version}｜rev {_revision_text(revision)}｜构建 {build}｜{match}"
+        for name, version, revision, build, match in rows
+    )
 
 
 def _finder_feed_summary(channel) -> str:
@@ -1224,13 +1292,21 @@ class OperationsUI:
         except Exception:
             return {}
 
-    def _bridge_queue_summary(self) -> str:
+    def _bridge_health(self) -> dict:
         bridge_ui = getattr(self, "bridge_queue_ui", None)
         client = getattr(bridge_ui, "client", None)
         if client is None:
-            return "检测失败"
+            return {}
         try:
-            snapshot = client.health()
+            return client.health()
+        except Exception:
+            return {}
+
+    def _bridge_queue_summary(self, snapshot: dict = None) -> str:
+        try:
+            snapshot = snapshot if isinstance(snapshot, dict) else self._bridge_health()
+            if not snapshot:
+                return "检测失败"
             staged = int(snapshot.get("staged_size", 0) or 0)
             pending = int(snapshot.get("pending_size", 0) or 0)
             inflight = int(snapshot.get("inflight_size", 0) or 0)
@@ -1469,7 +1545,9 @@ class OperationsUI:
         free_percent = disk.get("free_percent")
         disk_text = f"{float(free_percent):.2f}%" if isinstance(free_percent, (int, float)) else "等待检查"
         queue = delivery_summary(self.data_root, reconcile)
-        bridge_summary = self._bridge_queue_summary()
+        bridge_health = self._bridge_health()
+        bridge_summary = self._bridge_queue_summary(bridge_health)
+        component_versions = format_component_versions(image, bridge_health)
         delivery_stats = delivery_stats_summary(state_root)
         version_lines = "\n".join(
             f"  {item}" for item in runtime_version_text().split("｜")
@@ -1519,6 +1597,7 @@ class OperationsUI:
             f"运行时间：{format_uptime(self.started_at)}\n"
             f"镜像构建：{format_image_build_time(image.get('build_time'))}\n"
             f"运行版本：\n{version_lines}\n"
+            f"组件状态：\n{component_versions}\n"
             f"GHCR latest：{format_latest_match(image)}\n"
             "\n【微信与自动恢复】\n"
             f"微信状态：{self._wechat_login()}\n"

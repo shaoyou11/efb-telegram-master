@@ -163,12 +163,22 @@ class DeliveryTelemetry:
             (item for item in reversed(self.traces) if item.get("trace_id") == identity),
             {},
         )
+        timestamps = dict(previous.get("trace_timestamps") or {})
+        stage_timestamp_names = {
+            "received": "efb_received",
+            "sending": "telegram_sent",
+            "delivered": "telegram_ack",
+        }
+        timestamp_name = stage_timestamp_names.get(str(stage))
+        if timestamp_name:
+            timestamps[timestamp_name] = float(now)
         record = {
             "trace_id": identity,
             "stage": str(stage),
             "at": float(now),
             "type": str(message_type or previous.get("type") or ""),
             "size": max(0, int(size or previous.get("size") or 0)),
+            "trace_timestamps": timestamps,
         }
         if reason:
             record["error"] = sanitize_failure(reason)
@@ -391,6 +401,10 @@ class DeliveryTelemetry:
             self.state["last_failure"] = None
             self._save()
             self._save_stats()
+
+    def sending(self, uid: str, trace_id: str = ""):
+        with self.lock:
+            self._record_trace(uid, "sending", time.time(), trace_id=trace_id)
 
     def filtered(self, uid: str, trace_id: str = ""):
         with self.lock:

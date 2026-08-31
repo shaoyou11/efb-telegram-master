@@ -290,6 +290,7 @@ class SlaveMessageProcessor(LocaleMixin):
                                      'but it does not exist in database. Sending new message instead.',
                                      msg.uid)
 
+            self.telemetry.sending(str(msg.uid), trace_id)
             self.dispatch_with_retry(
                 msg=msg,
                 msg_template=msg_template,

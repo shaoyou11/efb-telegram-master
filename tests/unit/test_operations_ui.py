@@ -11,6 +11,7 @@ from efb_telegram_master.operations_ui import (
     delivery_summary,
     format_backup_verification,
     format_compact_status,
+    format_component_versions,
     format_contact_center,
     format_delivery_stats,
     format_health_action,
@@ -19,6 +20,7 @@ from efb_telegram_master.operations_ui import (
     format_restore_rehearsal_status,
     format_selftest_report,
     format_trace_report,
+    format_trace_durations,
     format_issues_report,
     format_audit_status,
     format_timestamp,
@@ -41,6 +43,29 @@ def test_format_timestamp_handles_missing_value():
     assert format_timestamp(None) == "暂无"
 
 
+def test_component_versions_do_not_invent_missing_revisions(monkeypatch):
+    for key in (
+        "EFB_CORE_REVISION",
+        "EFB_TELEGRAM_MASTER_REVISION",
+        "EFB_COMWECHAT_SLAVE_REVISION",
+        "EFB_COMWECHAT_HTTP_REVISION",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    text = format_component_versions(
+        {"build_time": "2026-08-31T01:00:00Z", "latest_match": True},
+        {
+            "comwechat_version": "3.9.12.16",
+            "revision": "abcdef1234567890",
+            "build_time": "2026-08-31T02:00:00Z",
+        },
+    )
+
+    assert "EFB:" in text
+    assert "ComWechat: 3.9.12.16｜rev abcdef123456" in text
+    assert "rev 未提供" in text
+
+
 def test_format_latest_match_accepts_legacy_verify_stack_field():
     assert format_latest_match({"ghcr_latest_match": "匹配", "checked_at": 1000}).startswith(
         "匹配（最近校验"
@@ -49,14 +74,43 @@ def test_format_latest_match_accepts_legacy_verify_stack_field():
 
 def test_format_trace_report_joins_bridge_and_telegram_without_content():
     text = format_trace_report(
-        [{"trace_id": "abcdef123456", "state": "acked", "attempts": 1}],
-        [{"trace_id": "abcdef123456", "stage": "delivered", "at": 1000, "type": "Image"}],
+        [{
+            "trace_id": "abcdef123456",
+            "state": "acked",
+            "attempts": 1,
+            "trace_timestamps": {
+                "bridge_enqueued": 998.0,
+                "attachment_ready": 998.5,
+                "efb_received": 999.0,
+            },
+        }],
+        [{
+            "trace_id": "abcdef123456",
+            "stage": "delivered",
+            "at": 1000,
+            "type": "Image",
+            "trace_timestamps": {
+                "telegram_sent": 999.5,
+                "telegram_ack": 1000.0,
+            },
+        }],
     )
 
     assert "abcdef123456" in text
     assert "Bridge 已确认" in text
     assert "Telegram 已投递" in text
     assert "消息正文" not in text
+    assert "入队→附件就绪 0.50秒" in text
+
+
+def test_trace_duration_rejects_negative_stage_time():
+    text = format_trace_durations({
+        "bridge_enqueued": 10,
+        "attachment_ready": 9,
+    })
+
+    assert "入队→附件就绪 时间异常" in text
+    assert "-1.00秒" not in text
 
 
 def test_issues_report_only_lists_actionable_failures():
