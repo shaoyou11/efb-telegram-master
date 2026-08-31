@@ -43,6 +43,23 @@ def test_format_timestamp_handles_missing_value():
     assert format_timestamp(None) == "暂无"
 
 
+def test_status_markup_has_one_global_wechat_auto_read_switch():
+    operations = OperationsUI.__new__(OperationsUI)
+    operations.channel = SimpleNamespace(
+        wechat_read_ui=SimpleNamespace(enabled=False),
+    )
+
+    markup = operations.markup("status", include_bridge=True)
+    buttons = [button for row in markup.inline_keyboard for button in row]
+    read_buttons = [
+        button for button in buttons
+        if button.callback_data == "ops:wechat-read-toggle"
+    ]
+
+    assert len(read_buttons) == 1
+    assert read_buttons[0].text == "微信自动已读：关"
+
+
 def test_component_versions_do_not_invent_missing_revisions(monkeypatch):
     for key in (
         "EFB_CORE_REVISION",
@@ -274,7 +291,7 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     assert "维护模式：关闭" in text
     assert "手动重启：暂无" in text
     assert "视频号任务：等待 1｜请求 2｜处理中 0｜失败 0" in text
-    assert "微信已读：未启用" in text
+    assert "微信自动已读：未启用" in text
 
 
 def test_compact_status_contains_operational_summary_without_detail_sections():

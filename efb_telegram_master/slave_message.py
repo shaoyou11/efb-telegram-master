@@ -301,6 +301,7 @@ class SlaveMessageProcessor(LocaleMixin):
             )
             self.telemetry.delivered(str(msg.uid), trace_id, silent=bool(silent))
             self.mark_delivery(msg, "delivered")
+            self.channel.wechat_read_ui.mark_message_read(msg)
         except Exception as e:
             self.telemetry.failed(str(msg.uid), repr(e), trace_id)
             self.mark_delivery(msg, "failed", repr(e))
@@ -418,6 +419,7 @@ class SlaveMessageProcessor(LocaleMixin):
             )
             self.telemetry.delivered(str(msg.uid))
             self.mark_delivery(msg, "delivered")
+            self.channel.wechat_read_ui.mark_message_read(msg)
             self.failure_store.remove(token)
             cleanup_failed_media(record["path"], self.failed_media_root)
             self.failed_messages.pop(token, None)
@@ -520,9 +522,6 @@ class SlaveMessageProcessor(LocaleMixin):
             for idx, i in enumerate(commands):
                 buttons.append([InlineKeyboardButton(i.name, callback_data=str(idx))])
             reply_markup = InlineKeyboardMarkup(buttons)
-
-        if self.channel.wechat_read_ui.should_offer(msg):
-            reply_markup = self.channel.wechat_read_ui.add_button(reply_markup)
 
         reactions = self.build_reactions_footer(msg.reactions)
 
