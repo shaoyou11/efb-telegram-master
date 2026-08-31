@@ -845,6 +845,7 @@ class OperationsUI:
         refresh: str = "",
         include_bridge: bool = False,
         detailed: bool = False,
+        wechat_read_enabled: bool = False,
     ) -> InlineKeyboardMarkup:
         rows = []
         if include_bridge:
@@ -867,7 +868,13 @@ class OperationsUI:
                 row.append(InlineKeyboardButton("刷新", callback_data=f"ops:{refresh}"))
             rows.append(row)
             rows.append([
+                InlineKeyboardButton(
+                    "微信自动已读：开" if wechat_read_enabled else "微信自动已读：关",
+                    callback_data="ops:wechat-read-toggle",
+                ),
                 InlineKeyboardButton("恢复演练", callback_data="ops:restore-rehearsal"),
+            ])
+            rows.append([
                 InlineKeyboardButton("关闭并删除", callback_data="ops:status-close"),
             ])
         else:
@@ -890,7 +897,13 @@ class OperationsUI:
         track_status_source: bool = False,
         detailed: bool = False,
     ):
-        markup = self.markup(refresh, include_bridge=include_bridge, detailed=detailed)
+        wechat_read = getattr(self.channel, "wechat_read_ui", None)
+        markup = self.markup(
+            refresh,
+            include_bridge=include_bridge,
+            detailed=detailed,
+            wechat_read_enabled=bool(getattr(wechat_read, "enabled", False)),
+        )
         if update.callback_query:
             result = update.callback_query.edit_message_text(text, reply_markup=markup)
         else:
@@ -1615,7 +1628,7 @@ class OperationsUI:
             f"失败诊断：{diagnostic_retention}\n"
             f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
             f"图片感知：{image_perception_text}\n"
-            f"微信已读：{wechat_read_text}\n"
+            f"微信自动已读：{wechat_read_text}\n"
             "\n【消息投递】\n"
             f"最近消息活动：{last_delivery}\n"
             f"队列最近延迟：{format_queue_latency(delivery)}\n"
@@ -1939,6 +1952,15 @@ class OperationsUI:
             self.backup_callback(update)
             return
         action = data.split(":", 1)[-1]
+        if action == "wechat-read-toggle":
+            settings = getattr(self.channel, "wechat_read_ui", None)
+            if settings is None:
+                query.answer("微信自动已读当前不可用", show_alert=True)
+                return
+            settings.set_enabled(not settings.enabled)
+            query.answer("微信自动已读已开启" if settings.enabled else "微信自动已读已关闭")
+            self.status(update, context)
+            return
         if action in {"close", "status-close"}:
             query.answer()
             source = self._status_source_messages.pop(

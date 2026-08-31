@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from pytest import fixture
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
@@ -123,10 +124,12 @@ def test_silent_delivery_overrides_normal_notification(channel, private, monkeyp
     captured = {}
     monkeypatch.setattr(channel.slave_messages, "dispatch_message",
                         lambda **kwargs: captured.update(kwargs))
+    channel.wechat_read_ui.mark_message_read = Mock()
 
     channel.slave_messages.send_message(msg)
 
     assert captured["silent"] is True
+    channel.wechat_read_ui.mark_message_read.assert_called_once_with(msg)
 
 
 def test_cleanup_same_day_offline_notices_deletes_only_matching_logs():

@@ -218,7 +218,7 @@ class TelegramChannel(MasterChannel):
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.slave_messages.retry_callback, pattern=r"^retry:"))
         self.bot_manager.dispatcher.add_handler(
-            CallbackQueryHandler(self.wechat_read_ui.callback, pattern=r"^wechatread:"))
+            CallbackQueryHandler(self.wechat_read_ui.legacy_callback, pattern=r"^wechatread:"))
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.void_callback_handler, pattern="void"))
         self.watchdog_control = WatchdogControl(self)
