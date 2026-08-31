@@ -56,6 +56,7 @@ from .slave_message import SlaveMessageProcessor
 from .utils import ExperimentalFlagsManager, EFBChannelChatIDStr, TelegramChatID, TelegramMessageID
 from .watchdog_control import HELP_TEXT, WatchdogControl
 from .wechat_control import WeChatControl
+from .wechat_read_ui import WechatReadUI
 
 
 class TelegramChannel(MasterChannel):
@@ -157,6 +158,7 @@ class TelegramChannel(MasterChannel):
         )
         self.delivery_policy_ui = DeliveryPolicyUI(self)
         self.operations_ui = OperationsUI(self)
+        self.wechat_read_ui = WechatReadUI(self)
         self.slave_messages: SlaveMessageProcessor = SlaveMessageProcessor(self)
         self.delivery_guard = DeliveryGuard(self.slave_messages.telemetry, self)
         self.delivery_guard.start()
@@ -215,6 +217,8 @@ class TelegramChannel(MasterChannel):
             CallbackQueryHandler(self.operations_ui.bridge_callback, pattern=r"^bridgeq:"))
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.slave_messages.retry_callback, pattern=r"^retry:"))
+        self.bot_manager.dispatcher.add_handler(
+            CallbackQueryHandler(self.wechat_read_ui.callback, pattern=r"^wechatread:"))
         self.bot_manager.dispatcher.add_handler(
             CallbackQueryHandler(self.void_callback_handler, pattern="void"))
         self.watchdog_control = WatchdogControl(self)

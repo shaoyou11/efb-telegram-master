@@ -1458,6 +1458,8 @@ class OperationsUI:
         spoiler_enabled = bool(getattr(spoiler_store, "enabled", False))
         image_perception = getattr(self.channel, "image_perception", None)
         image_perception_text = image_perception.summary() if image_perception else "关闭"
+        wechat_read = getattr(self.channel, "wechat_read_ui", None)
+        wechat_read_text = wechat_read.summary() if wechat_read else "未启用"
         last_delivery = format_timestamp(
             delivery.get("last_delivered_at") or delivery.get("last_inbound_at")
         )
@@ -1532,6 +1534,7 @@ class OperationsUI:
             f"失败诊断：{diagnostic_retention}\n"
             f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
             f"图片感知：{image_perception_text}\n"
+            f"微信已读：{wechat_read_text}\n"
             "\n【消息投递】\n"
             f"最近消息活动：{last_delivery}\n"
             f"队列最近延迟：{format_queue_latency(delivery)}\n"

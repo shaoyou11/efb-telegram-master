@@ -520,6 +520,9 @@ class SlaveMessageProcessor(LocaleMixin):
                 buttons.append([InlineKeyboardButton(i.name, callback_data=str(idx))])
             reply_markup = InlineKeyboardMarkup(buttons)
 
+        if self.channel.wechat_read_ui.should_offer(msg):
+            reply_markup = self.channel.wechat_read_ui.add_button(reply_markup)
+
         reactions = self.build_reactions_footer(msg.reactions)
 
         msg.text = msg.text or ""

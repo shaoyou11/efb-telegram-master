@@ -220,6 +220,7 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     assert "维护模式：关闭" in text
     assert "手动重启：暂无" in text
     assert "视频号任务：等待 1｜请求 2｜处理中 0｜失败 0" in text
+    assert "微信已读：未启用" in text
 
 
 def test_compact_status_contains_operational_summary_without_detail_sections():
