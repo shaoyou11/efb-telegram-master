@@ -453,6 +453,20 @@ def test_backup_summary_reports_count_and_latest_without_file_content(tmp_path: 
     assert result["latest"] == first.name
 
 
+def test_backup_list_markup_has_details_but_no_automatic_delete():
+    markup = OperationsUI._backup_list_markup([
+        {"name": "config-20260831-010000"},
+    ], 0)
+    callbacks = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+    ]
+
+    assert "ops:backup:view:config-20260831-010000" in callbacks
+    assert not any("delete" in callback for callback in callbacks)
+
+
 def test_human_size_uses_complete_unit_sequence():
     assert _human_size(int(1.5 * 1024**3)) == "1.50 GB"
 

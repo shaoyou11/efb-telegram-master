@@ -15,6 +15,7 @@ from telegram.ext import CallbackContext
 from ehforwarderbot import coordinator
 
 from .bridge_queue_ui import BridgeQueueUI
+from .backup_management import find_backup, list_backups
 from .delivery_telemetry import delivery_stats_summary, delivery_trace_summary
 from .failed_media import cleanup_failed_media
 
@@ -23,6 +24,7 @@ SENSITIVE_KEY = re.compile(r"(?i)^(token|password|passwd|secret|api_hash|api_id|
 BOT_TOKEN = re.compile(r"bot\d+:[^/\s]+")
 URL = re.compile(r"https?://[^\s]+")
 DELIVERY_PAGE_SIZE = 5
+BACKUP_PAGE_SIZE = 5
 RECONCILE_MAX_AGE_SECONDS = 3 * 60 * 60
 SHANGHAI_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 TRACE_STAGE_ORDER = (
@@ -1793,15 +1795,113 @@ class OperationsUI:
     def backup_info(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):
             return
-        result = backup_summary(self.data_root / "backups")
-        text = (
-            "EFB 配置备份\n\n"
-            f"数量：{result['count']} 份\n"
-            f"最近：{result['latest']}\n"
-            f"占用：{_human_size(result['bytes'])}\n"
-            f"路径：{result['path']}\n\n这里只显示状态，不传输配置内容。"
+        self._show_backup_list(update, 0)
+
+    def _backup_records(self) -> list:
+        restore = load_json(
+            self.data_root / "operations" / "state" / "restore-rehearsal.json"
         )
-        self._send(update, text, "backup")
+        restore_source = str(
+            restore.get("backup") or restore.get("source") or ""
+        )
+        return list_backups(self.data_root / "backups", restore_source)
+
+    @staticmethod
+    def _backup_list_markup(records: list, page: int) -> InlineKeyboardMarkup:
+        start = page * BACKUP_PAGE_SIZE
+        visible = records[start:start + BACKUP_PAGE_SIZE]
+        rows = [
+            [InlineKeyboardButton(
+                item["name"], callback_data=f"ops:backup:view:{item['name']}"
+            )]
+            for item in visible
+        ]
+        navigation = []
+        if page > 0:
+            navigation.append(InlineKeyboardButton(
+                "上一页", callback_data=f"ops:backup:list:{page - 1}"
+            ))
+        if start + BACKUP_PAGE_SIZE < len(records):
+            navigation.append(InlineKeyboardButton(
+                "下一页", callback_data=f"ops:backup:list:{page + 1}"
+            ))
+        if navigation:
+            rows.append(navigation)
+        rows.append([
+            InlineKeyboardButton("刷新", callback_data=f"ops:backup:list:{page}"),
+            InlineKeyboardButton("关闭", callback_data="ops:close"),
+        ])
+        return InlineKeyboardMarkup(rows)
+
+    def _show_backup_list(self, update: Update, page: int) -> None:
+        records = self._backup_records()
+        max_page = max(0, (len(records) - 1) // BACKUP_PAGE_SIZE)
+        page = max(0, min(int(page), max_page))
+        total = sum(int(item.get("bytes", 0) or 0) for item in records)
+        visible = records[page * BACKUP_PAGE_SIZE:(page + 1) * BACKUP_PAGE_SIZE]
+        lines = [
+            "EFB 配置备份",
+            "",
+            f"数量：{len(records)} 份｜占用：{_human_size(total)}",
+            f"页码：{page + 1}/{max_page + 1}",
+            "",
+        ]
+        if visible:
+            for item in visible:
+                protection = "、".join(item["protected"]) or "可人工删除"
+                lines.append(
+                    f"{item['name']}\n"
+                    f"  {_human_size(item['bytes'])}｜清单 {item['manifest']}｜"
+                    f"SQLite {item['sqlite']}｜{protection}"
+                )
+        else:
+            lines.append("当前没有配置备份。")
+        lines.extend(["", "仅显示校验结果，不读取或传输配置正文。"])
+        markup = self._backup_list_markup(records, page)
+        if update.callback_query:
+            update.callback_query.edit_message_text("\n".join(lines), reply_markup=markup)
+        else:
+            update.effective_message.reply_text("\n".join(lines), reply_markup=markup)
+
+    def _show_backup_detail(self, update: Update, name: str) -> None:
+        record = find_backup(self._backup_records(), name)
+        if not record:
+            text = "EFB 备份详情\n\n该备份不存在或已移动。"
+        else:
+            protection = "、".join(record["protected"]) or "无"
+            text = (
+                "EFB 备份详情\n\n"
+                f"名称：{record['name']}\n"
+                f"创建：{format_timestamp(record['created_at'])}\n"
+                f"大小：{_human_size(record['bytes'])}\n"
+                f"文件清单：{record['manifest']}\n"
+                f"SQLite：{record['sqlite']}\n"
+                f"保护原因：{protection}\n"
+                "删除方式：现有备份为多文件目录，按安全约束仅允许在 NAS 人工删除。"
+            )
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("返回", callback_data="ops:backup:list:0"),
+            InlineKeyboardButton("关闭", callback_data="ops:close"),
+        ]])
+        update.callback_query.edit_message_text(text, reply_markup=markup)
+
+    def backup_callback(self, update: Update) -> None:
+        query = update.callback_query
+        parts = (query.data or "").split(":", 3)
+        if len(parts) != 4:
+            query.answer("无效操作", show_alert=True)
+            return
+        query.answer()
+        if parts[2] == "list":
+            try:
+                page = int(parts[3])
+            except ValueError:
+                page = 0
+            self._show_backup_list(update, page)
+        elif parts[2] == "view":
+            self._show_backup_detail(update, parts[3])
+        else:
+            query.answer("无效操作", show_alert=True)
 
     def filetest(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):
@@ -1834,6 +1934,9 @@ class OperationsUI:
         data = query.data or ""
         if data.startswith("ops:delivery:"):
             self.delivery_callback(update, context)
+            return
+        if data.startswith("ops:backup:"):
+            self.backup_callback(update)
             return
         action = data.split(":", 1)[-1]
         if action in {"close", "status-close"}:
