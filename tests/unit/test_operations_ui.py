@@ -83,6 +83,34 @@ def test_component_versions_do_not_invent_missing_revisions(monkeypatch):
     assert "rev 未提供" in text
 
 
+def test_component_versions_use_persisted_container_metadata():
+    text = format_component_versions(
+        {
+            "build_time": "2026-09-01T01:00:00Z",
+            "latest_match": True,
+            "components": {
+                "bot_api": {
+                    "version": "Bot API 10.3",
+                    "revision": "1234567890abcdef",
+                    "build_time": "2026-08-26T16:27:29Z",
+                    "latest_match": True,
+                },
+                "watchdog": {
+                    "version": "latest",
+                    "revision": "abcdef1234567890",
+                    "build_time": "2026-08-13T05:11:47Z",
+                    "latest_match": True,
+                },
+            },
+        },
+        {},
+    )
+
+    assert "Bot API: Bot API 10.3｜rev 1234567890ab" in text
+    assert "Watchdog: latest｜rev abcdef123456｜" in text
+    assert text.count("｜匹配") >= 2
+
+
 def test_format_latest_match_accepts_legacy_verify_stack_field():
     assert format_latest_match({"ghcr_latest_match": "匹配", "checked_at": 1000}).startswith(
         "匹配（最近校验"
@@ -354,6 +382,22 @@ def test_contact_center_formats_unresolved_and_local_alias_history():
     assert "历史名称：旧名称" in text
     assert "本地别名：本地群" in text
     assert "旧群名" in text
+
+
+def test_contact_center_shows_manual_refresh_result():
+    text = format_contact_center({
+        "unresolved": [],
+        "aliased": [],
+        "refresh": {
+            "completed_at": 1_000,
+            "attempted": 2,
+            "resolved": 1,
+            "remaining": 1,
+        },
+    })
+
+    assert "刷新完成：" in text
+    assert "尝试 2｜新识别 1｜剩余 1" in text
 
 
 def test_restore_rehearsal_request_is_atomic_and_idempotent(tmp_path):
