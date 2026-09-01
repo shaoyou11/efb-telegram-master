@@ -5,6 +5,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from telegram import Bot, CallbackQuery, Chat, Message, Update, User
+from telegram.error import BadRequest
 from telegram.ext import ApplicationBuilder, MessageHandler, filters
 
 from efb_telegram_master.ptb22_runtime import (
@@ -12,6 +13,7 @@ from efb_telegram_master.ptb22_runtime import (
     DispatcherFacade,
     PTB22Runtime,
     SyncBotProxy,
+    is_benign_callback_error,
     normalize_proxy_url,
     retry_after_seconds,
     set_conversation_state,
@@ -40,6 +42,14 @@ class FakeApplication:
 def test_retry_after_accepts_current_and_future_ptb_types():
     assert retry_after_seconds(2) == 2.0
     assert retry_after_seconds(timedelta(seconds=3)) == 3.0
+
+
+def test_only_idempotent_or_expired_callback_errors_are_benign():
+    assert is_benign_callback_error(BadRequest("Message is not modified"))
+    assert is_benign_callback_error(BadRequest("Query is too old and response timeout expired"))
+    assert is_benign_callback_error(BadRequest("Query id is invalid"))
+    assert not is_benign_callback_error(BadRequest("Chat not found"))
+    assert not is_benign_callback_error(RuntimeError("Message is not modified"))
 
 
 def test_normalize_proxy_url_preserves_legacy_authentication():
@@ -142,6 +152,41 @@ def test_callback_query_edits_nested_message_without_event_loop_deadlock():
         asyncio.run(wrapped(update, object()))
         assert called[0][:3] == (123, 2, "updated")
         assert called[0][4] == "ptb22-callback-loop"
+    finally:
+        runner.stop()
+
+
+def test_callback_query_ignores_idempotent_bad_request():
+    runner = AsyncioRunner(thread_name="ptb22-idempotent-callback-loop")
+    runner.start()
+    application = FakeApplication()
+    bot = SyncBotProxy(FakeAsyncBot(), runner)
+
+    def callback(_update, _context):
+        raise BadRequest("Message is not modified")
+
+    dispatcher = DispatcherFacade(application, bot)
+    handler = MessageHandler(filters.ALL, callback)
+    dispatcher.add_handler(handler)
+    wrapped = application.handlers[0][0].callback
+    update = Update(
+        update_id=4,
+        callback_query=CallbackQuery(
+            id="callback-2",
+            from_user=User(id=9, first_name="Admin", is_bot=False),
+            chat_instance="instance-2",
+            message=Message(
+                message_id=3,
+                date=None,
+                chat=Chat(id=123, type=Chat.PRIVATE),
+                from_user=User(id=7, first_name="ETM", is_bot=True),
+                text="unchanged",
+            ),
+        ),
+    )
+
+    try:
+        assert asyncio.run(wrapped(update, object())) is None
     finally:
         runner.stop()
 
