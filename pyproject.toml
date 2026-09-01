@@ -7,7 +7,6 @@ authors = [
     {name = "Eana Hufwe", email = "ilove@1a23.com"},
 ]
 dependencies = [
-    "setuptools<81",
     "bullet>=2.2.0",
     "cjkwrap",
     "ehforwarderbot>=2.0.0",

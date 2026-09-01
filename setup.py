@@ -47,7 +47,6 @@ setup(
     ],
     tests_require=tests_require,
     install_requires=[
-        "setuptools<81",
         "ehforwarderbot>=2.0.0",
         "python-telegram-bot~=22.8",
         "python-magic",
