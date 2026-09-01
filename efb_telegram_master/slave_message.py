@@ -11,7 +11,7 @@ import traceback
 import urllib.parse
 from collections import defaultdict
 from pathlib import Path
-from typing import Tuple, Optional, TYPE_CHECKING, List, IO, Union
+from typing import Any, Tuple, Optional, TYPE_CHECKING, List, IO, Union
 
 import humanize
 import pydub
@@ -22,8 +22,10 @@ import secrets
 import time
 import telegram.ext
 from PIL import Image
-from telegram import InputFile, ChatAction, InputMediaAudio, InputMediaPhoto, InputMediaDocument, InputMediaVideo, InputMediaAnimation, \
-    InlineKeyboardMarkup, InlineKeyboardButton, ReplyMarkup, TelegramError, InputMedia, Update
+from telegram import InputFile, InputMediaAudio, InputMediaPhoto, InputMediaDocument, InputMediaVideo, InputMediaAnimation, \
+    InlineKeyboardMarkup, InlineKeyboardButton, InputMedia, Update
+from telegram.constants import ChatAction, FileSizeLimit
+from telegram.error import TelegramError
 from telegram.ext import CallbackContext
 
 from ehforwarderbot import Message, Status, coordinator
@@ -43,6 +45,9 @@ from .constants import Emoji
 from .delivery_policy import DeliveryPolicy
 from .delivery_telemetry import DeliveryTelemetry, normalize_message_type, sanitize_failure
 from .failed_delivery import FailedDeliveryStore
+from .ptb22_runtime import retry_after_seconds
+
+ReplyMarkup = Any
 from .failed_media import cleanup_failed_media, persist_failed_media
 from .file_size_policy import exceeds_bot_api_limit
 from .locale_mixin import LocaleMixin
@@ -169,7 +174,7 @@ class SlaveMessageProcessor(LocaleMixin):
             except telegram.error.RetryAfter as error:
                 if attempt >= self.DELIVERY_RETRY_COUNT:
                     raise
-                delay = max(1.0, float(error.retry_after))
+                delay = max(1.0, retry_after_seconds(error.retry_after))
                 self.logger.warning(
                     "[%s] Telegram 限流，%.1f 秒后进行第 %s 次发送。",
                     msg.uid,
@@ -1112,9 +1117,8 @@ class SlaveMessageProcessor(LocaleMixin):
             description.append([InlineKeyboardButton(msg.text, callback_data="void")])
         if reactions:
             description.append([InlineKeyboardButton(reactions, callback_data="void")])
-        effective_reply_markup = reply_markup if isinstance(reply_markup, InlineKeyboardMarkup) else InlineKeyboardMarkup([])
-        effective_reply_markup.inline_keyboard = description + effective_reply_markup.inline_keyboard
-        return effective_reply_markup
+        existing = reply_markup.inline_keyboard if isinstance(reply_markup, InlineKeyboardMarkup) else ()
+        return InlineKeyboardMarkup(description + [list(row) for row in existing])
 
 
     def slave_message_file(self, msg: Message, tg_dest: TelegramChatID,
@@ -1199,7 +1203,7 @@ class SlaveMessageProcessor(LocaleMixin):
                             target_quote_text: Optional[str] = None,
                             reply_markup: Optional[ReplyMarkup] = None,
                             silent: bool = False) -> telegram.Message:
-        self.bot.send_chat_action(tg_dest, ChatAction.RECORD_AUDIO, message_thread_id=thread_id)
+        self.bot.send_chat_action(tg_dest, ChatAction.RECORD_VOICE, message_thread_id=thread_id)
         if msg.text:
             text = self.html_substitutions(msg)
         else:
@@ -1294,9 +1298,10 @@ class SlaveMessageProcessor(LocaleMixin):
         # gaode require login on pc
         gaode = f'https://uri.amap.com/marker?position={attributes.longitude},{attributes.latitude}&name={name}&coordinate=gaode&callnative=1'
         tencent = f'https://apis.map.qq.com/uri/v1/marker?marker=coord:{attributes.latitude},{attributes.longitude};title:{content};addr:{name}'
-        location_reply_markup.inline_keyboard = location_reply_markup.inline_keyboard + [
+        location_reply_markup = InlineKeyboardMarkup([
+            *[list(row) for row in location_reply_markup.inline_keyboard],
             [InlineKeyboardButton(self._('Baidu'), url=baidu), InlineKeyboardButton(self._('Gaode'), url=gaode), InlineKeyboardButton(self._('Tencent'), url=tencent)],
-        ]
+        ])
 
         # TODO: Use live location if possible? Lift live location messages to EFB Framework?
         return self.bot.send_location(tg_dest, latitude=attributes.latitude,
@@ -1411,7 +1416,7 @@ class SlaveMessageProcessor(LocaleMixin):
         if attributes.status_type is StatusAttribute.Types.TYPING:
             self.bot.send_chat_action(tg_dest, ChatAction.TYPING, message_thread_id=thread_id)
         elif attributes.status_type is StatusAttribute.Types.UPLOADING_VOICE:
-            self.bot.send_chat_action(tg_dest, ChatAction.RECORD_AUDIO, message_thread_id=thread_id)
+            self.bot.send_chat_action(tg_dest, ChatAction.RECORD_VOICE, message_thread_id=thread_id)
         elif attributes.status_type is StatusAttribute.Types.UPLOADING_IMAGE:
             self.bot.send_chat_action(tg_dest, ChatAction.UPLOAD_PHOTO, message_thread_id=thread_id)
         elif attributes.status_type is StatusAttribute.Types.UPLOADING_VIDEO:
@@ -1638,10 +1643,10 @@ class SlaveMessageProcessor(LocaleMixin):
         file.seek(0)
         if exceeds_bot_api_limit(
                 file_size,
-                telegram.constants.MAX_FILESIZE_UPLOAD,
+                FileSizeLimit.FILESIZE_UPLOAD,
                 self.channel.flag("local_bot_api")):
             size_str = humanize.naturalsize(file_size)
-            max_size_str = humanize.naturalsize(telegram.constants.MAX_FILESIZE_UPLOAD)
+            max_size_str = humanize.naturalsize(FileSizeLimit.FILESIZE_UPLOAD)
             return self._(
                 "Attachment is too large ({size}). Maximum allowed by Telegram Bot API is {max_size}. (AT02)").format(
                 size=size_str, max_size=max_size_str)

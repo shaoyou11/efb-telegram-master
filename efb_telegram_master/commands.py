@@ -5,7 +5,8 @@ from typing import Tuple, Dict, TYPE_CHECKING, List, Any, Union, Optional
 
 from telegram import Message, Update
 from telegram.ext import CommandHandler, ConversationHandler, CallbackQueryHandler, MessageHandler, CallbackContext
-from telegram.ext.filters import Filters
+from .ptb_filters import Filters
+from .ptb22_runtime import set_conversation_state
 
 from ehforwarderbot import coordinator, Channel, Middleware
 from ehforwarderbot.channel import SlaveChannel
@@ -74,7 +75,7 @@ class CommandsManager(LocaleMixin):
 
     def register_command(self, message: Message, commands: ETMCommandMsgStorage):
         message_identifier = (message.chat.id, message.message_id)
-        self.command_conv.conversations[message_identifier] = Flags.COMMAND_PENDING
+        set_conversation_state(self.command_conv, message_identifier, Flags.COMMAND_PENDING)
         self.msg_storage[message_identifier] = commands
 
     def command_exec(self, update: Update, context: CallbackContext) -> Optional[int]:

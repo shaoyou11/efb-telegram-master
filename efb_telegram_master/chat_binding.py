@@ -11,10 +11,10 @@ from typing import Tuple, Dict, Optional, List, TYPE_CHECKING, IO, Union, Patter
 
 import telegram  # lgtm [py/import-and-import-from]
 from PIL import Image
-from telegram import Update, Message, TelegramError, InlineKeyboardButton, ChatAction, InlineKeyboardMarkup, \
-    ParseMode
-from telegram.error import BadRequest
-from telegram.ext import ConversationHandler, CommandHandler, CallbackQueryHandler, CallbackContext, Filters, \
+from telegram import Update, Message, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ChatAction, ParseMode
+from telegram.error import BadRequest, TelegramError
+from telegram.ext import ConversationHandler, CommandHandler, CallbackQueryHandler, CallbackContext, \
     MessageHandler
 
 from ehforwarderbot import coordinator, Channel, MsgType
@@ -30,6 +30,8 @@ from .message import ETMMsg
 from .msg_type import TGMsgType
 from .utils import EFBChannelChatIDStr, TelegramChatID, TelegramMessageID, TgChatMsgIDStr, TelegramTopicID
 from .chat_title_sync import build_private_chat_title
+from .ptb_filters import Filters
+from .ptb22_runtime import set_conversation_state
 
 if TYPE_CHECKING:
     from . import TelegramChannel
@@ -102,7 +104,7 @@ class ChatBindingManager(LocaleMixin):
         self._topic_mutex = threading.Lock()
 
         # Link handler
-        non_edit_filter = Filters.update.message | Filters.update.channel_post
+        non_edit_filter = Filters.update_message | Filters.update_channel_post
         self.bot.dispatcher.add_handler(
             CommandHandler("link", self.link_chat_show_list, filters=non_edit_filter))
         self.link_handler = ConversationHandler(
@@ -226,7 +228,7 @@ class ChatBindingManager(LocaleMixin):
                 tg_chat_id = TelegramChatID(message.chat_id)
                 tg_msg_id = TelegramMessageID(message.reply_text(self._("Processing...")).message_id)
                 storage_id: Tuple[TelegramChatID, TelegramMessageID] = (tg_chat_id, tg_msg_id)
-                self.link_handler.conversations[storage_id] = Flags.LINK_EXEC
+                set_conversation_state(self.link_handler, storage_id, Flags.LINK_EXEC)
                 self.msg_storage[storage_id] = ChatListStorage([chat])
                 return self.build_link_action_message(chat, tg_chat_id, tg_msg_id)
             if message.message_thread_id:
@@ -242,19 +244,19 @@ class ChatBindingManager(LocaleMixin):
                         tg_chat_id = TelegramChatID(message.chat_id)
                         tg_msg_id = TelegramMessageID(message.reply_text(self._("Processing...")).message_id)
                         storage_id: Tuple[TelegramChatID, TelegramMessageID] = (tg_chat_id, tg_msg_id)
-                        self.link_handler.conversations[storage_id] = Flags.LINK_EXEC
+                        set_conversation_state(self.link_handler, storage_id, Flags.LINK_EXEC)
                         self.msg_storage[storage_id] = ChatListStorage([chat])
                         return self.build_link_action_message(chat, tg_chat_id, tg_msg_id)
 
+        forwarded_chat = utils.get_forwarded_chat(message)
         if message.chat.type != telegram.Chat.PRIVATE:
             links = self.db.get_chat_assoc(
                 master_uid=utils.chat_id_to_str(self.channel.channel_id, ChatID(str(message.chat.id))))
             if links:
                 return self.link_chat_gen_list(TelegramChatID(message.chat.id), pattern=" ".join(args),
                                                chats=links, filter_availability=False)
-        elif message.forward_from_chat and \
-                message.forward_from_chat.type == telegram.Chat.CHANNEL:
-            chat_id = ChatID(str(message.forward_from_chat.id))
+        elif forwarded_chat and forwarded_chat.type == telegram.Chat.CHANNEL:
+            chat_id = ChatID(str(forwarded_chat.id))
             links = self.db.get_chat_assoc(
                 master_uid=utils.chat_id_to_str(self.channel.channel_id, chat_id))
             if links:
@@ -410,7 +412,7 @@ class ChatBindingManager(LocaleMixin):
         self.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=msg_text,
                                    reply_markup=InlineKeyboardMarkup(chat_btn_list))
 
-        self.link_handler.conversations[(chat_id, message_id)] = Flags.LINK_CONFIRM
+        set_conversation_state(self.link_handler, (chat_id, message_id), Flags.LINK_CONFIRM)
 
         return Flags.LINK_CONFIRM
 
@@ -579,7 +581,7 @@ class ChatBindingManager(LocaleMixin):
                 message_id=storage_key[1])
 
         # Use channel ID if command is forwarded from a channel.
-        forwarded_chat = update.effective_message.forward_from_chat
+        forwarded_chat = utils.get_forwarded_chat(update.effective_message)
         if forwarded_chat and forwarded_chat.type == telegram.Chat.CHANNEL:
             tg_chat_to_link = forwarded_chat
         else:
@@ -647,7 +649,7 @@ class ChatBindingManager(LocaleMixin):
                                                            len(links)).format(len(links)),
                                              reply_to_message_id=update.message.message_id)
         else:
-            forwarded_chat = update.message.forward_from_chat
+            forwarded_chat = utils.get_forwarded_chat(update.message)
             if forwarded_chat and forwarded_chat.type == telegram.Chat.CHANNEL:
                 links = self.db.get_chat_assoc(
                     master_uid=utils.chat_id_to_str(self.channel.channel_id, ChatID(str(forwarded_chat.id))))
@@ -762,7 +764,7 @@ class ChatBindingManager(LocaleMixin):
                                    message_id=message_id,
                                    reply_markup=InlineKeyboardMarkup(chat_btn_list))
 
-        self.chat_head_handler.conversations[(chat_id, message_id)] = Flags.CHAT_HEAD_CONFIRM
+        set_conversation_state(self.chat_head_handler, (chat_id, message_id), Flags.CHAT_HEAD_CONFIRM)
 
     def make_chat_head(self, update: Update, context: CallbackContext) -> int:
         """
@@ -840,7 +842,7 @@ class ChatBindingManager(LocaleMixin):
                                                "or choose a recipient:\n\nLegend:\n") + "\n".join(legends),
                                    chat_id=chat_id, message_id=message_id,
                                    reply_markup=InlineKeyboardMarkup(buttons))
-        self.suggestion_handler.conversations[storage_id] = Flags.SUGGEST_RECIPIENTS
+        set_conversation_state(self.suggestion_handler, storage_id, Flags.SUGGEST_RECIPIENTS)
 
     def suggested_recipient(self, update: Update, context: CallbackContext):
         """Send the message to selected recipient among all suggested when a
@@ -919,7 +921,7 @@ class ChatBindingManager(LocaleMixin):
         if update.effective_chat.is_forum:
             return self.update_thread_info(update, context)
 
-        forwarded_from_chat = update.effective_message.forward_from_chat
+        forwarded_from_chat = utils.get_forwarded_chat(update.effective_message)
         if forwarded_from_chat and forwarded_from_chat.type == telegram.Chat.CHANNEL:
             tg_chat = forwarded_from_chat
         else:

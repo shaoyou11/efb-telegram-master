@@ -2,23 +2,29 @@ name: Update strings to Crowdin
 
 on:
   push:
+    branches:
+      - master
     paths:
       - 'efb_telegram_master/**.py'
       - 'README.rst'
+      - '.github/workflows/crowdin.yml'
 
 jobs:
   crowdin:
     runs-on: ubuntu-latest
+    env:
+      CROWDIN_TOKEN: ${{ secrets.CROWDIN_TOKEN }}
+      CROWDIN_PROJECT_ID: ${{ vars.CROWDIN_PROJECT_ID }}
     steps:
-    - uses: actions/checkout@v1
-    - name: Set up Python 3.8
-      uses: actions/setup-python@v1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - name: Set up Python 3.10
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
-        python-version: 3.8
+        python-version: '3.10'
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install '.[test]'
+        pip install '.[tests]'
         pip install sphinx sphinx-intl pandoc doit
         pip install https://github.com/blueset/restbuilder/archive/master.zip
     - name: Install binary dependencies
@@ -34,15 +40,18 @@ jobs:
         mkdir -p EFBChannels/efb-telegram-master
         find . -mindepth 1 -maxdepth 1 '!' -name EFBChannels -exec mv '{}' EFBChannels/efb-telegram-master/ ';'
     - name: Setup configuration file
-      env:
-        CROWDIN_TOKEN: ${{ secrets.CROWDIN_TOKEN }}
+      if: env.CROWDIN_TOKEN != '' && env.CROWDIN_PROJECT_ID != ''
       run: |
         config=$HOME/.crowdin.yaml
         here=$(pwd)
-        echo project_identifier: ehforwarderbot > $config
-        echo api_key: $CROWDIN_TOKEN >> $config
+        echo project_id: $CROWDIN_PROJECT_ID > $config
+        echo api_token: $CROWDIN_TOKEN >> $config
         echo base_path: $here >> $config
     - name: Upload translations
+      if: env.CROWDIN_TOKEN != '' && env.CROWDIN_PROJECT_ID != ''
       run: |
         cd EFBChannels/efb-telegram-master
         doit run --verbosity=2 crowdin
+    - name: Skip unconfigured Crowdin upload
+      if: env.CROWDIN_TOKEN == '' || env.CROWDIN_PROJECT_ID == ''
+      run: echo 'Crowdin credentials are not configured; upload skipped.'

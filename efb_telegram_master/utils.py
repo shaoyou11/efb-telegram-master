@@ -38,6 +38,15 @@ OldMsgID = Tuple[TelegramChatID, TelegramMessageID]
 # EFBChannelChatIDStr = str
 
 
+def get_forwarded_chat(message: telegram.Message) -> Optional[telegram.Chat]:
+    """Return the source chat for both legacy and PTB 22 forwarded messages."""
+    legacy_chat = getattr(message, "forward_from_chat", None)
+    if legacy_chat is not None:
+        return legacy_chat
+    origin = getattr(message, "forward_origin", None)
+    return getattr(origin, "chat", None)
+
+
 class ExperimentalFlagsManager(LocaleMixin):
 
     DEFAULT_VALUES = {

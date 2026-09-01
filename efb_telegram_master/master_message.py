@@ -8,10 +8,11 @@ from threading import Thread
 from typing import Optional, TYPE_CHECKING, Tuple, Any
 
 import humanize
-from telegram import Update, Message, Chat, TelegramError, Contact, File
-from telegram.constants import MAX_FILESIZE_DOWNLOAD
-from telegram.ext import MessageHandler, Filters, CallbackContext, CommandHandler
-from telegram.utils.helpers import escape_markdown
+from telegram import Update, Message, Chat, Contact, File
+from telegram.constants import FileSizeLimit
+from telegram.error import TelegramError
+from telegram.ext import MessageHandler, CallbackContext, CommandHandler
+from telegram.helpers import escape_markdown
 
 from ehforwarderbot import coordinator
 from ehforwarderbot.constants import MsgType
@@ -27,6 +28,9 @@ from .locale_mixin import LocaleMixin
 from .message import ETMMsg
 from .msg_type import TGMsgType, get_msg_type
 from .utils import EFBChannelChatIDStr, TelegramChatID, TelegramMessageID
+from .ptb_filters import Filters
+
+MAX_FILESIZE_DOWNLOAD = FileSizeLimit.FILESIZE_DOWNLOAD
 
 if TYPE_CHECKING:
     from . import TelegramChannel
@@ -152,7 +156,7 @@ class MasterMessageProcessor(LocaleMixin):
             self.logger.debug('[%s] Message is edited: %s', mid, message.edit_date)
             msg_log = self.db.get_msg_log(master_msg_id=utils.message_id_to_str(update=update))
             if not msg_log or msg_log.slave_message_id == self.db.FAIL_FLAG:
-                message.reply_text(self._("Error: This message cannot be edited, and thus is not sent. (ME01)"), quote=True)
+                message.reply_text(self._("Error: This message cannot be edited, and thus is not sent. (ME01)"), do_quote=True)
                 return
             destination = msg_log.slave_origin_uid
             edited = msg_log
@@ -227,14 +231,14 @@ class MasterMessageProcessor(LocaleMixin):
             if candidates:
                 self.logger.debug("[%s] Candidate suggestions are found for this message: %s", mid, candidates)
                 tg_err_msg = message.reply_text(self._("Error: No recipient specified.\n"
-                                                       "Please reply to a previous message. (MS01)"), quote=True)
+                                                       "Please reply to a previous message. (MS01)"), do_quote=True)
                 self.channel.chat_binding.register_suggestions(update, candidates,
                                                                TelegramChatID(update.effective_chat.id),
                                                                TelegramMessageID(tg_err_msg.message_id))
             else:
                 self.logger.debug("[%s] Candidate suggestions not found, give up.", mid)
                 message.reply_text(self._("Error: No recipient specified.\n"
-                                          "Please reply to a previous message. (MS02)"), quote=True)
+                                          "Please reply to a previous message. (MS02)"), do_quote=True)
         else:
             return self.process_telegram_message(update, context, destination, quote=quote, edited=edited)
 
@@ -528,7 +532,7 @@ class MasterMessageProcessor(LocaleMixin):
                     "and how to stop this warning at {docs}."
                 ).format(dest=dest_name,
                          docs="https://etm.1a23.studio/"),
-                quote=True,
+                do_quote=True,
                 disable_web_page_preview=True)
 
     def _check_file_download(self, file_obj: Any):

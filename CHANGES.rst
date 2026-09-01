@@ -19,12 +19,18 @@ Added
 
 Changed
 -------
+- Migrate the Telegram runtime from ``python-telegram-bot`` 13.15 to 22.8.
+- Run PTB's asyncio application in an isolated thread while preserving EFB's
+  synchronous channel API and existing custom delivery behavior.
+- Require Python 3.10 or later.
 
 Removed
 -------
 
 Fixed
 -----
+- Adapt immutable media and inline-keyboard objects, file downloads, filters,
+  errors, constants, polling lifecycle, and the configuration wizard to PTB 22.
 
 2.3.1_ - 2022-05-24
 ===================
