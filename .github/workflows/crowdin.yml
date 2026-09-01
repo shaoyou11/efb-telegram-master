@@ -5,6 +5,7 @@ on:
     paths:
       - 'efb_telegram_master/**.py'
       - 'README.rst'
+      - '.github/workflows/crowdin.yml'
 
 jobs:
   crowdin:
@@ -18,7 +19,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install '.[test]'
+        pip install '.[tests]'
         pip install sphinx sphinx-intl pandoc doit
         pip install https://github.com/blueset/restbuilder/archive/master.zip
     - name: Install binary dependencies
