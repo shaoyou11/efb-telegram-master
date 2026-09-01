@@ -4,7 +4,7 @@ import time
 from datetime import timedelta
 from unittest.mock import patch
 
-from telegram import Bot, Chat, Message, Update, User
+from telegram import Bot, CallbackQuery, Chat, Message, Update, User
 from telegram.ext import ApplicationBuilder, MessageHandler, filters
 
 from efb_telegram_master.ptb22_runtime import (
@@ -24,6 +24,9 @@ class FakeAsyncBot:
 
     async def send_message(self, chat_id, text, **kwargs):
         return chat_id, text, kwargs, threading.current_thread().name
+
+    async def edit_message_text(self, text, chat_id, message_id, **kwargs):
+        return chat_id, message_id, text, kwargs, threading.current_thread().name
 
 
 class FakeApplication:
@@ -99,6 +102,46 @@ def test_dispatcher_facade_executes_sync_callback_off_event_loop():
         assert called[0][0][0:2] == (123, "ok")
         assert called[0][0][2]["reply_markup"] is None
         assert called[0][1] != threading.current_thread().name
+    finally:
+        runner.stop()
+
+
+def test_callback_query_edits_nested_message_without_event_loop_deadlock():
+    runner = AsyncioRunner(thread_name="ptb22-callback-loop")
+    runner.start()
+    application = FakeApplication()
+    bot = SyncBotProxy(FakeAsyncBot(), runner)
+    called = []
+
+    def callback(update, _context):
+        called.append(update.callback_query.edit_message_text("updated"))
+
+    dispatcher = DispatcherFacade(application, bot)
+    handler = MessageHandler(filters.ALL, callback)
+    dispatcher.add_handler(handler)
+    wrapped = application.handlers[0][0].callback
+
+    message = Message(
+        message_id=2,
+        date=None,
+        chat=Chat(id=123, type=Chat.PRIVATE),
+        from_user=User(id=7, first_name="ETM", is_bot=True),
+        text="before",
+    )
+    update = Update(
+        update_id=3,
+        callback_query=CallbackQuery(
+            id="callback-1",
+            from_user=User(id=9, first_name="Admin", is_bot=False),
+            chat_instance="instance-1",
+            message=message,
+        ),
+    )
+
+    try:
+        asyncio.run(wrapped(update, object()))
+        assert called[0][:3] == (123, 2, "updated")
+        assert called[0][4] == "ptb22-callback-loop"
     finally:
         runner.stop()
 

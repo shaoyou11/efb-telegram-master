@@ -50,6 +50,34 @@ def set_conversation_state(handler: ConversationHandler, key: Any, value: Any) -
     conversations[key] = value
 
 
+def _set_bot_tree(value: Any, bot: Any, seen: Optional[set] = None) -> None:
+    """Set one bot on a Telegram object and every nested Telegram object."""
+    if seen is None:
+        seen = set()
+    value_id = id(value)
+    if value_id in seen:
+        return
+    seen.add(value_id)
+
+    if isinstance(value, TelegramObject):
+        value.set_bot(bot)
+        for cls in type(value).__mro__:
+            for name in getattr(cls, "__slots__", ()):
+                if name == "_bot":
+                    continue
+                try:
+                    child = getattr(value, name)
+                except (AttributeError, RuntimeError):
+                    continue
+                _set_bot_tree(child, bot, seen)
+    elif isinstance(value, dict):
+        for child in value.values():
+            _set_bot_tree(child, bot, seen)
+    elif isinstance(value, (list, tuple, set)):
+        for child in value:
+            _set_bot_tree(child, bot, seen)
+
+
 def _sync_object_class(original_class):
     cached = _SYNC_OBJECT_CLASSES.get(original_class)
     if cached:
@@ -66,12 +94,15 @@ def _sync_object_class(original_class):
         def sync_method(self, *args, __method=original, **kwargs):
             proxy = self.get_bot()
 
+            if not isinstance(proxy, SyncBotProxy):
+                return __method(self, *args, **kwargs)
+
             async def invoke():
-                self.set_bot(proxy._async_bot)
+                _set_bot_tree(self, proxy._async_bot)
                 try:
                     return await __method(self, *args, **kwargs)
                 finally:
-                    self.set_bot(proxy)
+                    _set_bot_tree(self, proxy)
 
             return proxy._runner.submit(invoke())
 
