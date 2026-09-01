@@ -1,12 +1,14 @@
 import re
 import sys
+from datetime import datetime, timezone
 from io import BytesIO
 from types import ModuleType
 
 from pytest import raises
+from telegram import Chat, Message, MessageOriginChannel
 
 from efb_telegram_master.utils import b64de, b64en, message_id_to_str, \
-    message_id_str_to_id, chat_id_str_to_id, chat_id_to_str, convert_tgs_to_gif
+    message_id_str_to_id, chat_id_str_to_id, chat_id_to_str, convert_tgs_to_gif, get_forwarded_chat
 
 
 def test_flag(channel):
@@ -45,6 +47,21 @@ def test_chat_id_str_conversion():
     assert (channel_id, chat_id, group_id) == chat_id_str_to_id(
         chat_id_to_str(channel_id=channel_id, chat_uid=chat_id, group_id=group_id)
     ), "Converting channel-chat ID with group ID"
+
+
+def test_get_forwarded_chat_from_ptb22_origin():
+    source = Chat(id=-1001, type=Chat.CHANNEL, title="Source")
+    message = Message(
+        message_id=1,
+        date=datetime.now(timezone.utc),
+        chat=Chat(id=1, type=Chat.PRIVATE),
+        forward_origin=MessageOriginChannel(
+            date=datetime.now(timezone.utc),
+            chat=source,
+            message_id=2,
+        ),
+    )
+    assert get_forwarded_chat(message) is source
 
 
 def test_convert_tgs_to_gif(monkeypatch):

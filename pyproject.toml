@@ -1,13 +1,13 @@
 [project]
 name = "efb-telegram-master"
-version = "2.3.8"
+version = "2.4.0.dev1"
 description = "Telegram Master Channel for EH Forwarder Bot, based on Telegram Bot API."
 authors = [
     {name = "jiz4oh", email = "git@jiz4oh.com"},
     {name = "Eana Hufwe", email = "ilove@1a23.com"},
 ]
 dependencies = [
-    "setuptools>=82.0.1",
+    "setuptools<81",
     "bullet>=2.2.0",
     "cjkwrap",
     "ehforwarderbot>=2.0.0",
@@ -18,13 +18,13 @@ dependencies = [
     "pillow",
     "pydub",
     "python-magic",
-    "python-telegram-bot~=13.15",
+    "python-telegram-bot~=22.8",
     "requests",
     "retrying",
     "ruamel.yaml",
     "typing-extensions>=3.7.4.1",
 ]
-requires-python = ">=3.6"
+requires-python = ">=3.10"
 readme = "README.rst"
 license = {text = "AGPLv3+"}
 keywords = ["ehforwarderbot", "EH Forwarder Bot", "EH Forwarder Bot Master Channel", "Telegram", "Telegram Bot", "chatbot"]
@@ -34,8 +34,9 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.6",
-    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Communications :: Chat",
     "Topic :: Utilities",
 ]

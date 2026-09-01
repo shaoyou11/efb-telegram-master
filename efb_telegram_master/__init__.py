@@ -17,7 +17,7 @@ import telegram.error
 from PIL import Image, WebPImagePlugin
 from ruamel.yaml import YAML
 from telegram import Update, Message, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CommandHandler, CallbackQueryHandler, CallbackContext, Filters
+from telegram.ext import CommandHandler, CallbackQueryHandler, CallbackContext
 
 import ehforwarderbot  # lgtm [py/import-and-import-from]
 from ehforwarderbot import Channel, coordinator
@@ -57,6 +57,7 @@ from .utils import ExperimentalFlagsManager, EFBChannelChatIDStr, TelegramChatID
 from .watchdog_control import HELP_TEXT, WatchdogControl
 from .wechat_control import WeChatControl
 from .wechat_read_ui import WechatReadUI
+from .ptb_filters import Filters
 
 
 class TelegramChannel(MasterChannel):
@@ -180,7 +181,7 @@ class TelegramChannel(MasterChannel):
                                           fallback=True)
 
         # Basic message handlers
-        non_edit_filter = Filters.update.message | Filters.update.channel_post
+        non_edit_filter = Filters.update_message | Filters.update_channel_post
         self.bot_manager.dispatcher.add_handler(
             CommandHandler("start", self.start, filters=non_edit_filter))
         self.bot_manager.dispatcher.add_handler(
@@ -288,13 +289,13 @@ class TelegramChannel(MasterChannel):
         """
         assert isinstance(update, Update)
         assert isinstance(update.effective_message, Message)
+        forwarded_chat = etm_utils.get_forwarded_chat(update.effective_message)
         if update.effective_message.chat.type != telegram.Chat.PRIVATE:  # Group message
             if update.effective_chat.is_forum:
                 msg = self.info_topic(update)
             else:
                 msg = self.info_group(update)
-        elif update.effective_message.forward_from_chat and \
-                update.effective_message.forward_from_chat.type == 'channel':  # Forwarded channel command.
+        elif forwarded_chat and forwarded_chat.type == 'channel':  # Forwarded channel command.
             msg = self.info_channel(update)
         else:  # Talking to the bot.
             msg = self.info_general()
@@ -438,7 +439,8 @@ class TelegramChannel(MasterChannel):
 
     def info_channel(self, update):
         """Generate string for chat linking info of a channel."""
-        chat = update.effective_message.forward_from_chat
+        chat = etm_utils.get_forwarded_chat(update.effective_message)
+        assert chat
         links = self.db.get_chat_assoc(master_uid=etm_utils.chat_id_to_str(self.channel_id, chat.id))
         if links:  # Linked chat
             # TRANSLATORS: ‘channel’ here refers to a Telegram channel.
@@ -508,11 +510,11 @@ class TelegramChannel(MasterChannel):
         assert isinstance(update, Update)
         assert isinstance(update.effective_message, telegram.Message)
         assert isinstance(update.effective_chat, telegram.Chat)
+        forwarded_chat = etm_utils.get_forwarded_chat(update.effective_message)
         if context.args:  # Group binding command
             if (update.effective_message.chat.type != telegram.Chat.PRIVATE and update.effective_chat.id != self.topic_group) or \
-                    (update.effective_message.forward_from_chat and
-                     update.effective_message.forward_from_chat.type == telegram.Chat.CHANNEL and
-                     update.effective_message.forward_from_chat.id != self.topic_group):
+                    (forwarded_chat and forwarded_chat.type == telegram.Chat.CHANNEL and
+                     forwarded_chat.id != self.topic_group):
                 self.chat_binding.link_chat(update, context.args)
             else:
                 self.bot_manager.send_message(update.effective_chat.id,
@@ -644,7 +646,7 @@ class TelegramChannel(MasterChannel):
         # noinspection PyBroadException
         try:
             raise error
-        except telegram.error.Unauthorized:
+        except telegram.error.Forbidden:
             self.logger.error("The bot is not authorised to send update:\n%s\n%s", str(update), str(error))
         except telegram.error.BadRequest as e:
             assert isinstance(update, Update)
@@ -666,7 +668,7 @@ class TelegramChannel(MasterChannel):
                 update.message.reply_text(self._("This message is not processed due to poor internet environment "
                                                  "of the server.\n"
                                                  "<code>{code}</code>").format(code=html.escape(str(error))),
-                                          quote=True,
+                                          do_quote=True,
                                           parse_mode="HTML")
 
             timeout_interval = self.flag('network_error_prompt_interval')

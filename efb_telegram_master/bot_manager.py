@@ -1,6 +1,7 @@
 # coding=utf-8
 import collections
 import io
+import inspect
 import json
 import logging
 import os
@@ -11,12 +12,15 @@ from typing import List, TYPE_CHECKING, Callable
 import telegram.constants
 import telegram.error
 from telegram import Update, InputFile, User, File, ForumTopic
-from telegram.ext import CallbackContext, Filters, MessageHandler, Updater, Dispatcher
+from telegram.constants import MessageLimit
+from telegram.ext import ApplicationBuilder, CallbackContext, MessageHandler
 
 from . import utils
 from .locale_handler import LocaleHandler
 from .locale_mixin import LocaleMixin
 from .rate_limiter import TelegramRateLimiter
+from .ptb_filters import Filters
+from .ptb22_runtime import PTB22Runtime, normalize_proxy_url, retry_after_seconds
 
 if TYPE_CHECKING:
     from . import TelegramChannel
@@ -32,8 +36,8 @@ class TelegramBotManager(LocaleMixin):
     Attributes:
         me (telegram.User): Telegram User
         admins (List[int]): List of admin user IDs.
-        updater (telegram.ext.Updater): Updater of the bot
-        dispatcher (telegram.ext.Dispatcher): Dispatcher of the updater
+        updater (PTB22Runtime): Async PTB runtime exposed through a sync facade.
+        dispatcher (DispatcherFacade): Handler registration facade.
     """
 
     webhook = False
@@ -81,7 +85,7 @@ class TelegramBotManager(LocaleMixin):
                     try:
                         return fn(*args, **kwargs)
                     except telegram.error.RetryAfter as error:
-                        retry_after = max(1, int(getattr(error, "retry_after", 1)))
+                        retry_after = max(1, int(retry_after_seconds(getattr(error, "retry_after", 1))))
                         cls.logger.warning(
                             "Telegram flood control hit for %s, sleep %ss then retry.",
                             fn,
@@ -193,7 +197,7 @@ class TelegramBotManager(LocaleMixin):
                 prefix = (prefix and (prefix + "\n")) or prefix
                 suffix = (suffix and ("\n" + suffix)) or suffix
 
-                if len(prefix + text + suffix) >= telegram.constants.MAX_CAPTION_LENGTH:
+                if len(prefix + text + suffix) >= MessageLimit.CAPTION_LENGTH:
                     full_message = io.StringIO(prefix + text + suffix)
                     truncated = prefix + text[:100] + "\n…\n" + text[-100:] + suffix
                     kwargs['caption'] = truncated
@@ -276,12 +280,22 @@ class TelegramBotManager(LocaleMixin):
         if isinstance(conf_req_kwargs, collections.abc.Mapping):
             req_kwargs.update(conf_req_kwargs)
 
-        self.logger.debug("Setting up Telegram bot updater...")
-        self.updater: Updater = Updater(config['token'],
-                                        base_url=channel.flag('api_base_url'),
-                                        base_file_url=channel.flag('api_base_file_url'),
-                                        request_kwargs=req_kwargs,
-                                        use_context=True)
+        self.logger.debug("Setting up Telegram bot application...")
+        builder = ApplicationBuilder().token(config['token'])
+        api_base_url = channel.flag('api_base_url')
+        api_base_file_url = channel.flag('api_base_file_url')
+        if api_base_url:
+            builder = builder.base_url(api_base_url)
+        if api_base_file_url:
+            builder = builder.base_file_url(api_base_file_url)
+        for key in ("read_timeout", "write_timeout", "connect_timeout", "pool_timeout"):
+            if key in req_kwargs:
+                builder = getattr(builder, key)(req_kwargs[key])
+        proxy_url = normalize_proxy_url(req_kwargs)
+        if proxy_url:
+            builder = builder.proxy(proxy_url).get_updates_proxy(proxy_url)
+        builder = builder.local_mode(bool(channel.flag('local_tdlib_api')))
+        self.updater = PTB22Runtime(builder.build())
 
         if isinstance(config.get('webhook'), dict):
             self.logger.debug("Setting up webhook...")
@@ -294,7 +308,7 @@ class TelegramBotManager(LocaleMixin):
         self.me: User = me
         self.logger.debug("Connection to Telegram bot API is OK...")
         self.admins: List[int] = config['admins']
-        self.dispatcher: Dispatcher = self.updater.dispatcher
+        self.dispatcher = self.updater.dispatcher
         self.logger.debug("Adding base dispatchers...")
         # New whitelist handler
         whitelist_filter = ~Filters.user(user_id=self.admins)
@@ -334,7 +348,7 @@ class TelegramBotManager(LocaleMixin):
         else:
             text = kwargs.pop('text')
         args = args[:1]
-        if len(prefix + text + suffix) >= telegram.constants.MAX_MESSAGE_LENGTH:
+        if len(prefix + text + suffix) >= MessageLimit.MAX_TEXT_LENGTH:
             full_message = io.BytesIO((prefix + text + suffix).encode('utf-8'))
             full_message.seek(0)
             truncated = prefix + text[:100] + "\n...\n" + text[-100:] + suffix
@@ -377,7 +391,7 @@ class TelegramBotManager(LocaleMixin):
         prefix = (prefix and (prefix + "\n")) or prefix
         suffix = (suffix and ("\n" + suffix)) or suffix
         text = kwargs.pop('text', '')
-        if len(prefix + text + suffix) >= telegram.constants.MAX_MESSAGE_LENGTH:
+        if len(prefix + text + suffix) >= MessageLimit.MAX_TEXT_LENGTH:
             full_message = io.BytesIO((prefix + text + suffix).encode())
             truncated = prefix + text[:100] + "\n...\n" + text[-100:] + suffix
             msg = self._bot_edit_message_text_fallback(text=truncated, **kwargs)
@@ -682,10 +696,18 @@ class TelegramBotManager(LocaleMixin):
         parse_mode = kwargs.pop('parse_mode', None)
         media = kwargs.pop('media', None)
         caption_entities = kwargs.pop('caption_entities', None)
-        media.caption = text
-        media.caption_entities = caption_entities
-        if hasattr(media, 'parse_mode'):
-            media.parse_mode = parse_mode
+        constructor_kwargs = {}
+        for name in inspect.signature(type(media)).parameters:
+            if name in {"caption", "caption_entities", "parse_mode", "filename_depr"}:
+                continue
+            if hasattr(media, name):
+                constructor_kwargs[name] = getattr(media, name)
+        constructor_kwargs.update(
+            caption=text,
+            caption_entities=caption_entities,
+            parse_mode=parse_mode,
+        )
+        media = type(media)(**constructor_kwargs)
         return self.updater.bot.edit_message_media(media=media, *args, **kwargs)
 
     def reply_error(self, update, errmsg):

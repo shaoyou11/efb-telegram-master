@@ -2,9 +2,9 @@ import sys
 import os
 from setuptools import setup, find_packages
 
-if sys.version_info < (3, 6):
+if sys.version_info < (3, 10):
     raise Exception(
-        "Python 3.6 or higher is required. Your version is %s." % sys.version)
+        "Python 3.10 or higher is required. Your version is %s." % sys.version)
 
 version_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
                             'efb_telegram_master/__version__.py')
@@ -30,7 +30,7 @@ setup(
     url='https://etm.1a23.studio',
     license='AGPLv3+',
     include_package_data=True,
-    python_requires='>=3.6',
+    python_requires='>=3.10',
     keywords=['ehforwarderbot', 'EH Forwarder Bot', 'EH Forwarder Bot Master Channel', 'Telegram',
               'Telegram Bot', 'chatbot'],
     classifiers=[
@@ -39,15 +39,17 @@ setup(
         "Intended Audience :: Developers",
         "Intended Audience :: End Users/Desktop",
         "Programming Language :: Python :: 3 :: Only",
-        "Programming Language :: Python :: 3.6",
-        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
         "Topic :: Communications :: Chat",
         "Topic :: Utilities"
     ],
     tests_require=tests_require,
     install_requires=[
+        "setuptools<81",
         "ehforwarderbot>=2.0.0",
-        "python-telegram-bot~=13.15",
+        "python-telegram-bot~=22.8",
         "python-magic",
         "ffmpeg-python",
         "peewee",

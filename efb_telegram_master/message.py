@@ -74,7 +74,7 @@ class ETMMsg(Message):
                 ext = mimetypes.guess_extension(self.mime, strict=False)
                 mime = self.mime
             file = tempfile.NamedTemporaryFile(suffix=ext)
-            file_meta.download(out=file)
+            file_meta.download_to_memory(out=file)
             file.seek(0)
 
             if not mime:

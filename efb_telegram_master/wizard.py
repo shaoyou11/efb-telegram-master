@@ -1,3 +1,4 @@
+import asyncio
 import shutil
 from getpass import getpass
 from gettext import translation
@@ -9,15 +10,38 @@ from importlib.resources import files
 
 import cjkwrap
 from ruamel.yaml import YAML
-from telegram import Bot, TelegramError
-from telegram.ext.filters import Filters
-from telegram.ext import MessageHandler, Updater
-from telegram.utils.request import Request
+from telegram import Bot, BotCommand
+from telegram.error import TelegramError
+from telegram.ext import ApplicationBuilder, MessageHandler
+from telegram.request import HTTPXRequest
 
 from ehforwarderbot import coordinator, utils
 from ehforwarderbot.types import ModuleID
 
 from . import TelegramChannel
+from .ptb_filters import Filters
+from .ptb22_runtime import PTB22Runtime, normalize_proxy_url
+
+
+def _build_request(data):
+    config = data.data.get("request_kwargs") or {}
+    kwargs = {
+        key: config[key]
+        for key in ("read_timeout", "write_timeout", "connect_timeout", "pool_timeout")
+        if key in config
+    }
+    proxy = normalize_proxy_url(config)
+    if proxy:
+        kwargs["proxy"] = proxy
+    return HTTPXRequest(**kwargs)
+
+
+def _run_bot_method(data, method_name, *args):
+    async def invoke():
+        async with Bot(data.data["token"], request=_build_request(data)) as bot:
+            return await getattr(bot, method_name)(*args)
+
+    return asyncio.run(invoke())
 
 
 def print_wrapped(text):
@@ -36,7 +60,7 @@ ngettext = translator.ngettext
 
 class DataModel:
     data: dict
-    request: Optional[Request] = None
+    request: Optional[HTTPXRequest] = None
     building_default = False
 
     def __init__(self, profile: str, instance_id: str):
@@ -181,7 +205,12 @@ def input_bot_token(data: DataModel, default=None):
                 continue
         else:
             try:
-                Bot(ans, request=data.request).get_me()
+                original_token = data.data.get("token")
+                data.data["token"] = ans
+                try:
+                    _run_bot_method(data, "get_me")
+                finally:
+                    data.data["token"] = original_token
             except TelegramError as e:
                 print_wrapped(str(e))
                 print()
@@ -228,7 +257,7 @@ def setup_proxy(data):
                     "username": username,
                     "password": password
                 }
-        data.request = Request(**data.data['request_kwargs'])
+        data.request = _build_request(data)
 
 
 def setup_telegram_bot(data):
@@ -303,8 +332,7 @@ def setup_telegram_bot_commands_list(data):
 
     if answer == prompt_yes:
         print(_("Updating commands list..."), end="", flush=True)
-        Bot(data.data['token'], request=data.request).set_my_commands(
-            [
+        commands = [
                 ("status", _("Show comprehensive EFB operational status.")),
                 ("issues", _("Show actionable EFB issues only.")),
                 ("trace", _("Show recent end-to-end delivery traces.")),
@@ -328,7 +356,7 @@ def setup_telegram_bot_commands_list(data):
                 ("security", _("Scan configuration key names for sensitive fields.")),
                 ("update_info", _("Update info of linked Telegram group.")),
             ]
-        )
+        _run_bot_method(data, "set_my_commands", [BotCommand(*item) for item in commands])
 
         print(_("OK"))
         print()
@@ -380,11 +408,16 @@ def setup_admins(data):
         if answer == prompt_yes:
             print(_("Starting ID bot..."), end="", flush=True)
 
-            updater = Updater(token=data.data['token'],
-                              request_kwargs=data.data.get(
-                                  'request_kwargs', None),
-                              use_context=True)
-            updater.dispatcher.add_handler(
+            builder = ApplicationBuilder().token(data.data['token'])
+            request_kwargs = data.data.get('request_kwargs') or {}
+            for key in ("read_timeout", "write_timeout", "connect_timeout", "pool_timeout"):
+                if key in request_kwargs:
+                    builder = getattr(builder, key)(request_kwargs[key])
+            proxy = normalize_proxy_url(request_kwargs)
+            if proxy:
+                builder = builder.proxy(proxy).get_updates_proxy(proxy)
+            runtime = PTB22Runtime(builder.build())
+            runtime.dispatcher.add_handler(
                 MessageHandler(
                     Filters.all,
                     lambda update, context:
@@ -395,7 +428,7 @@ def setup_admins(data):
                     )
                 )
             )
-            updater.start_polling()
+            runtime.start_polling()
 
             print(_("OK"))
             print()
@@ -409,7 +442,7 @@ def setup_admins(data):
             data.data['admins'] = input_admin_ids(default=data.data['admins'])
             print()
             print(_("Stopping ID bot..."), end="", flush=True)
-            updater.stop()
+            runtime.stop()
             print(_("OK"))
         else:
             data.data['admins'] = input_admin_ids(default=data.data['admins'])

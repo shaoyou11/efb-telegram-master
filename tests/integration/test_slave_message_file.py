@@ -5,7 +5,9 @@ from tempfile import NamedTemporaryFile
 from typing import Optional, List, Tuple
 
 from pytest import mark, approx
-from telegram import MAX_FILESIZE_UPLOAD
+from telegram.constants import FileSizeLimit
+
+MAX_FILESIZE_UPLOAD = FileSizeLimit.FILESIZE_UPLOAD
 from telethon.tl.custom import Message
 from telethon.tl.types import MessageEntityMentionName, MessageEntityCode
 

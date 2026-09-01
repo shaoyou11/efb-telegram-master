@@ -6,14 +6,14 @@ from importlib.resources import files
 from typing import TYPE_CHECKING
 
 from language_tags import tags
-from telegram.ext.handler import Handler
+from telegram.ext import BaseHandler
 from telegram import Update
 
 if TYPE_CHECKING:
     from . import TelegramChannel
 
 
-class LocaleHandler(Handler):
+class LocaleHandler(BaseHandler):
     """
     Handler class Extract.
 
@@ -25,10 +25,10 @@ class LocaleHandler(Handler):
     """
 
     def __init__(self, channel: 'TelegramChannel', pass_update_queue: bool = False):
-        def void_function(*args, **kwargs):
-            pass
+        async def void_function(*args, **kwargs):
+            return None
 
-        super().__init__(void_function, pass_update_queue)
+        super().__init__(void_function)
         self.logger = logging.getLogger(__name__)
 
         self.channel = channel
@@ -57,6 +57,3 @@ class LocaleHandler(Handler):
                                                           languages=[locale, 'C'],
                                                           fallback=True)
         return False
-
-    def handle_update(self, update, dispatcher, check_result, context=None):
-        pass
