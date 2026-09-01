@@ -218,9 +218,26 @@ def _revision_text(value) -> str:
 
 
 def format_component_versions(image: dict, bridge: dict) -> str:
+    components = (image or {}).get("components")
+    components = components if isinstance(components, dict) else {}
+
+    def component(name: str) -> dict:
+        value = components.get(name)
+        return value if isinstance(value, dict) else {}
+
+    def component_match(value: dict, fallback: str = "未校验") -> str:
+        if isinstance(value.get("latest_match"), bool):
+            return "匹配" if value["latest_match"] else "不匹配"
+        return str(value.get("latest_status") or fallback)
+
     efb_build = format_image_build_time((image or {}).get("build_time"))
     efb_match = format_latest_match(image).split("（", 1)[0]
-    bridge_build = format_image_build_time((bridge or {}).get("build_time"))
+    comwechat = component("comwechat")
+    bot_api = component("bot_api")
+    watchdog = component("watchdog")
+    bridge_build = format_image_build_time(
+        (bridge or {}).get("build_time") or comwechat.get("build_time")
+    )
     rows = (
         ("EFB", _package_version("ehforwarderbot"),
          os.getenv("EFB_CORE_REVISION"), efb_build, efb_match),
@@ -231,16 +248,16 @@ def format_component_versions(image: dict, bridge: dict) -> str:
         ("HTTP Client", _package_version("python-comwechatrobot-http"),
          os.getenv("EFB_COMWECHAT_HTTP_REVISION"), efb_build, efb_match),
         ("ComWechat", str((bridge or {}).get("comwechat_version") or "未提供"),
-         (bridge or {}).get("revision"), bridge_build,
-         os.getenv("COMWECHAT_GHCR_MATCH", "未校验")),
-        ("Bot API", os.getenv("TELEGRAM_BOT_API_VERSION", "未提供"),
-         os.getenv("TELEGRAM_BOT_API_REVISION"),
-         os.getenv("TELEGRAM_BOT_API_BUILD_TIME", "未提供"),
-         os.getenv("TELEGRAM_BOT_API_GHCR_MATCH", "未校验")),
-        ("Watchdog", os.getenv("EFB_WATCHDOG_VERSION", "未提供"),
-         os.getenv("EFB_WATCHDOG_REVISION"),
-         os.getenv("EFB_WATCHDOG_BUILD_TIME", "未提供"),
-         os.getenv("EFB_WATCHDOG_GHCR_MATCH", "未校验")),
+         (bridge or {}).get("revision") or comwechat.get("revision"), bridge_build,
+         component_match(comwechat, os.getenv("COMWECHAT_GHCR_MATCH", "未校验"))),
+        ("Bot API", str(bot_api.get("version") or os.getenv("TELEGRAM_BOT_API_VERSION", "未提供")),
+         bot_api.get("revision") or os.getenv("TELEGRAM_BOT_API_REVISION"),
+         format_image_build_time(bot_api.get("build_time") or os.getenv("TELEGRAM_BOT_API_BUILD_TIME")),
+         component_match(bot_api, os.getenv("TELEGRAM_BOT_API_GHCR_MATCH", "未校验"))),
+        ("Watchdog", str(watchdog.get("version") or os.getenv("EFB_WATCHDOG_VERSION", "未提供")),
+         watchdog.get("revision") or os.getenv("EFB_WATCHDOG_REVISION"),
+         format_image_build_time(watchdog.get("build_time") or os.getenv("EFB_WATCHDOG_BUILD_TIME")),
+         component_match(watchdog, os.getenv("EFB_WATCHDOG_GHCR_MATCH", "未校验"))),
     )
     return "\n".join(
         f"  {name}: {version}｜rev {_revision_text(revision)}｜构建 {build}｜{match}"
@@ -719,6 +736,15 @@ def format_contact_center(snapshot: dict) -> str:
         "",
         f"未识别：{len(unresolved)} 条｜本地别名：{len(aliased)} 条",
     ]
+    refresh = snapshot.get("refresh") if isinstance(snapshot.get("refresh"), dict) else None
+    if refresh:
+        lines.append(
+            "刷新完成："
+            f"{format_timestamp(refresh.get('completed_at'))}｜"
+            f"尝试 {int(refresh.get('attempted', 0) or 0)}｜"
+            f"新识别 {int(refresh.get('resolved', 0) or 0)}｜"
+            f"剩余 {int(refresh.get('remaining', len(unresolved)) or 0)}"
+        )
     for index, item in enumerate(unresolved, start=1):
         history = item.get("history") if isinstance(item.get("history"), list) else []
         lines.extend([
