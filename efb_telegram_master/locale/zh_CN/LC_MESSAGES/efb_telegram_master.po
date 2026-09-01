@@ -195,7 +195,7 @@ msgstr "请选择要绑定的会话…"
 msgid "\n\n"
 "Legend:\n"
 msgstr "\n\n"
-"图例:\n"
+"图例：\n"
 
 #: efb_telegram_master/chat_binding.py:420
 #: efb_telegram_master/chat_binding.py:491
@@ -1248,3 +1248,58 @@ msgstr "正在保存配置..."
 msgid "Congratulations! You have finished the setup wizard for EFB Telegram Master Channel."
 msgstr "恭喜！您已完成了 EFB Telegram 主端的设置向导。"
 
+#: efb_telegram_master/chat_binding.py
+msgid "ComWechatChannel"
+msgstr "微信"
+
+#: efb_telegram_master/wizard.py
+msgid "Show comprehensive EFB operational status."
+msgstr "查看 EFB 综合运行状态。"
+
+#: efb_telegram_master/wizard.py
+msgid "Show actionable EFB issues only."
+msgstr "仅查看需要处理的 EFB 异常。"
+
+#: efb_telegram_master/wizard.py
+msgid "Show recent end-to-end delivery traces."
+msgstr "查看最近的端到端投递记录。"
+
+#: efb_telegram_master/wizard.py
+msgid "Manage WeChat automatic recovery."
+msgstr "管理微信自动恢复。"
+
+#: efb_telegram_master/wizard.py
+msgid "Manage WeChat login and recovery."
+msgstr "管理微信登录与恢复。"
+
+#: efb_telegram_master/wizard.py
+msgid "Configure delivery policy for a remote chat."
+msgstr "配置微信会话的投递策略。"
+
+#: efb_telegram_master/wizard.py
+msgid "Show EFB storage usage and cleanup paths."
+msgstr "查看 EFB 存储占用和清理路径。"
+
+#: efb_telegram_master/wizard.py
+msgid "Show configuration backup status."
+msgstr "查看配置备份状态。"
+
+#: efb_telegram_master/wizard.py
+msgid "Get the WeChat login QR code."
+msgstr "获取微信登录二维码。"
+
+#: efb_telegram_master/wizard.py
+msgid "Show EFB component versions."
+msgstr "查看 EFB 组件版本。"
+
+#: efb_telegram_master/wizard.py
+msgid "Check local Telegram Bot API file support."
+msgstr "检查本地 Telegram Bot API 文件支持。"
+
+#: efb_telegram_master/wizard.py
+msgid "Scan configuration key names for sensitive fields."
+msgstr "扫描配置键名中的敏感字段。"
+
+#: efb_telegram_master/wizard.py
+msgid "Author label style in forwarded messages.\n\n- bold: Render author label in bold.\n- blockquote: Render author label as a blockquote."
+msgstr "转发消息中的作者标签样式。\n\n- bold：以粗体显示作者标签。\n- blockquote：以引用块显示作者标签。"

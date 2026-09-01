@@ -340,7 +340,8 @@ class ChatBindingManager(LocaleMixin):
         # self._db_update_slave_chats_cache(chat_list.chats)
 
         for ch in chat_list.channels.values():
-            legend.append(f"{ch.channel_emoji}: {ch.channel_name}")
+            channel_name = self._("ComWechatChannel") if ch.channel_name == "ComWechatChannel" else ch.channel_name
+            legend.append(f"{ch.channel_emoji}: {channel_name}")
 
         # Build inline button list
         chat_btn_list: List[List[InlineKeyboardButton]] = []
