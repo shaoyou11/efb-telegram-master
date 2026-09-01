@@ -39,7 +39,7 @@ from .avatar_marker import member_name_with_avatar_marker
 from . import utils
 from .chat_destination_cache import ChatDestinationCache
 from .chat_object_cache import ChatObjectCacheManager
-from .chat_title_sync import should_auto_rename
+from .chat_title_sync import should_auto_rename, should_sync_topic
 from .commands import ETMCommandMsgStorage
 from .constants import Emoji
 from .delivery_policy import DeliveryPolicy
@@ -1427,6 +1427,7 @@ class SlaveMessageProcessor(LocaleMixin):
     def send_status(self, status: Status):
         if isinstance(status, ChatUpdates):
             self.logger.debug("Received chat updates from channel %s", status.channel)
+            force_name_sync = set(getattr(status, "force_name_sync", set()) or set())
             for i in status.removed_chats:
                 self.db.delete_slave_chat_info(status.channel.channel_id, i)
                 self.chat_manager.delete_chat_object(status.channel.channel_id, i)
@@ -1445,7 +1446,7 @@ class SlaveMessageProcessor(LocaleMixin):
                             self.bot.set_chat_title(telegram_chat_id, etm_chat.chat_title[:128])
                     except (TelegramError, TypeError, ValueError) as error:
                         self.logger.warning("Unable to synchronize Telegram chat title for %s: %s", chat.uid, error)
-                if should_auto_rename(previous_title, str(chat.uid)):
+                if should_sync_topic(previous_title, str(chat.uid), i in force_name_sync):
                     for topic_chat_id, thread_id in self.db.get_topic_assocs(slave_uid):
                         try:
                             self.bot.edit_forum_topic(

@@ -28,6 +28,14 @@ def test_plain_nontechnical_contact_id_is_not_renamed():
     assert not MODULE.should_auto_rename("💻👤 JERRYgu", "JERRYgu")
 
 
+def test_explicit_sync_repairs_topic_when_cached_title_is_already_resolved():
+    assert MODULE.should_sync_topic("💻👥 班级群", "51560464837@chatroom", force=True)
+
+
+def test_regular_sync_preserves_user_customized_topic_title():
+    assert not MODULE.should_sync_topic("我的班级群", "51560464837@chatroom")
+
+
 def test_extract_service_chat_name_from_historical_customer_service_message():
     assert MODULE.extract_service_chat_name("[Anker售后为你服务]") == "Anker售后"
     assert MODULE.extract_service_chat_name("普通客服消息") is None
