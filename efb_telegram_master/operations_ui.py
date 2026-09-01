@@ -1482,6 +1482,12 @@ class OperationsUI:
     def contact_center(self, update: Update, _context: CallbackContext, refresh: bool = False):
         if not self._allowed(update):
             return
+        if refresh:
+            self._render(
+                update,
+                "EFB 未识别联系人\n\n正在刷新联系人，请稍候……",
+                self.contact_markup(),
+            )
         try:
             snapshot = self._contact_snapshot(refresh=refresh)
         except Exception as error:
@@ -2026,7 +2032,10 @@ class OperationsUI:
             "filetest": self.filetest,
             "security": self.security,
         }
-        query.answer()
+        if action == "contacts-refresh":
+            query.answer("已开始刷新联系人，请稍候……")
+        else:
+            query.answer()
         handler = handlers.get(action)
         if handler:
             handler(update, context)

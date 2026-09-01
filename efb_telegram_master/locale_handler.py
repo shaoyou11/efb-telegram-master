@@ -13,6 +13,24 @@ if TYPE_CHECKING:
     from . import TelegramChannel
 
 
+def normalize_locale(language_code: str) -> str:
+    """Map Telegram language tags to the locale catalogs shipped by ETM."""
+    normalized = str(language_code or "").replace('-', '_')
+    lowered = normalized.lower()
+    if lowered in {"zh", "zh_cn", "zh_sg", "zh_hans"}:
+        return "zh_CN"
+    if lowered in {"zh_tw", "zh_hk", "zh_mo", "zh_hant"}:
+        return "zh_TW"
+
+    tag = tags.tag(language_code)
+    if tag.language:
+        locale = tag.language.format
+        if tag.region:
+            locale += "_" + tag.region.format
+        return locale
+    return normalized
+
+
 class LocaleHandler(BaseHandler):
     """
     Handler class Extract.
@@ -44,13 +62,7 @@ class LocaleHandler(BaseHandler):
         self.logger.debug("[%s] Update has language %s.", update.update_id, update.effective_user.language_code)
         if update.effective_user.language_code and update.effective_user.language_code != self.channel.locale:
             self.channel.locale = update.effective_user.language_code
-            tag = tags.tag(update.effective_user.language_code)
-            if tag.language:
-                locale = tag.language.format
-                if tag.region:
-                    locale += "_" + tag.region.format
-            else:
-                locale = update.effective_user.language_code.replace('-', '_')
+            locale = normalize_locale(update.effective_user.language_code)
             self.logger.info("Updating locale to %s", locale)
             self.channel.translator = gettext.translation("efb_telegram_master",
                                                           str(files('efb_telegram_master').joinpath('locale')),

@@ -400,6 +400,31 @@ def test_contact_center_shows_manual_refresh_result():
     assert "尝试 2｜新识别 1｜剩余 1" in text
 
 
+def test_contact_center_renders_progress_before_manual_refresh_result():
+    ui = OperationsUI(SimpleNamespace(config={"admins": [7]}))
+    rendered = []
+    ui._render = lambda _update, text, _markup: rendered.append(text)
+    ui._contact_snapshot = lambda refresh=False: {
+        "unresolved": [],
+        "aliased": [],
+        "refresh": {
+            "completed_at": 1_000,
+            "attempted": 2,
+            "resolved": 1,
+            "remaining": 1,
+        },
+    }
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=7),
+        callback_query=SimpleNamespace(),
+    )
+
+    ui.contact_center(update, None, refresh=True)
+
+    assert rendered[0] == "EFB 未识别联系人\n\n正在刷新联系人，请稍候……"
+    assert "刷新完成：" in rendered[1]
+
+
 def test_restore_rehearsal_request_is_atomic_and_idempotent(tmp_path):
     path = tmp_path / "restore-rehearsal-request.json"
 
