@@ -6,9 +6,15 @@ from typing import Any, Coroutine, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from telegram import TelegramObject, Update
+from telegram.error import BadRequest
 from telegram.ext import Application, BaseHandler, ConversationHandler
 
 _SYNC_OBJECT_CLASSES = {}
+_BENIGN_CALLBACK_ERRORS = (
+    "message is not modified",
+    "query is too old",
+    "query id is invalid",
+)
 
 
 def retry_after_seconds(value: Any) -> float:
@@ -48,6 +54,14 @@ def set_conversation_state(handler: ConversationHandler, key: Any, value: Any) -
     if conversations is None:
         conversations = handler._conversations
     conversations[key] = value
+
+
+def is_benign_callback_error(error: Exception) -> bool:
+    """Return whether Telegram rejected an idempotent or expired callback."""
+    if not isinstance(error, BadRequest):
+        return False
+    message = str(error).lower()
+    return any(fragment in message for fragment in _BENIGN_CALLBACK_ERRORS)
 
 
 def _set_bot_tree(value: Any, bot: Any, seen: Optional[set] = None) -> None:
@@ -235,7 +249,12 @@ def _wrap_handler(handler: BaseHandler, bot: SyncBotProxy) -> BaseHandler:
 
     async def async_callback(update: Update, context: Any):
         _bind_sync_bot(update, bot)
-        return await asyncio.to_thread(callback, update, context)
+        try:
+            return await asyncio.to_thread(callback, update, context)
+        except BadRequest as error:
+            if update.callback_query is not None and is_benign_callback_error(error):
+                return None
+            raise
 
     async_callback._etm_ptb22_wrapped = True
     handler.callback = async_callback
