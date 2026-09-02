@@ -127,7 +127,7 @@ def test_filter_contact_view_excludes_public_accounts_and_groups():
 
 def test_filter_overview_shows_categories_without_chat_buttons():
     store = Mock()
-    store.quiet_hours.return_value = {"enabled": False}
+    store.quiet_hours.return_value = {"enabled": False, "start": "23:00", "end": "07:00"}
     store.list_rules.return_value = {
         "silent": {"policy": "silent"},
         "filtered": {"policy": "filtered"},

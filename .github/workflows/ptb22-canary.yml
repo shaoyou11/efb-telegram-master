@@ -12,9 +12,14 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/ptb22-canary.yml'
+      - '.github/workflows/tests.yml'
 
 permissions:
   contents: read
+
+concurrency:
+  group: ptb-canary-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test-and-build:
@@ -30,11 +35,18 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: setup.py
       - name: Install system dependencies
+        timeout-minutes: 5
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg libmagic-dev libwebp-dev
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y ffmpeg libmagic-dev libwebp-dev
       - name: Install PTB 22 migration dependencies
+        timeout-minutes: 8
+        env:
+          PIP_DEFAULT_TIMEOUT: 30
+          PIP_RETRIES: 2
         run: |
           python -m pip install --upgrade pip build
           pip install '.[tests,tgs]'
@@ -61,6 +73,11 @@ jobs:
         run: pytest -q
       - name: Build migration package
         run: python -m build
+      - name: Check type annotations
+        if: matrix.python-version == '3.11'
+        continue-on-error: true
+        timeout-minutes: 3
+        run: mypy --install-types --non-interactive -p efb_telegram_master
       - name: Upload migration package
         if: matrix.python-version == '3.11'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

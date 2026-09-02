@@ -3,6 +3,7 @@ import hashlib
 import os
 import re
 import tempfile
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from importlib import metadata
@@ -18,6 +19,8 @@ from .bridge_queue_ui import BridgeQueueUI
 from .backup_management import find_backup, list_backups
 from .delivery_telemetry import delivery_stats_summary, delivery_trace_summary
 from .failed_media import cleanup_failed_media
+from .delivery_policy import DeliveryPolicy
+from .settings_history import LABELS as SETTING_LABELS, apply_setting
 
 
 SENSITIVE_KEY = re.compile(r"(?i)^(token|password|passwd|secret|api_hash|api_id|vncpass)$")
@@ -868,6 +871,8 @@ class OperationsUI:
             settings=getattr(channel, "bridge_queue_settings", None),
         )
         self._status_source_messages = {}
+        self._operation_lock = threading.Lock()
+        self._contact_sessions = {}
 
     @staticmethod
     def markup(
@@ -880,10 +885,13 @@ class OperationsUI:
         rows = []
         if include_bridge:
             rows.append([
-                InlineKeyboardButton(
-                    "精简状态" if detailed else "详细状态",
-                    callback_data="ops:status" if detailed else "ops:status-detail",
-                ),
+                InlineKeyboardButton("概览", callback_data="ops:status"),
+                InlineKeyboardButton("投递统计", callback_data="ops:page:delivery"),
+                InlineKeyboardButton("组件版本", callback_data="ops:page:components"),
+                InlineKeyboardButton("运行设置", callback_data="ops:page:settings"),
+            ])
+            rows.append([
+                InlineKeyboardButton("配置历史", callback_data="ops:history"),
                 InlineKeyboardButton("投递明细", callback_data="ops:delivery"),
                 InlineKeyboardButton("异常中心", callback_data="ops:errors"),
             ])
@@ -1218,6 +1226,8 @@ class OperationsUI:
         )
 
     def _execute_delivery_action(self, update: Update, action: str, kind: str, identity: str):
+        update.callback_query.answer("已受理，正在处理")
+        self._render(update, "EFB 投递操作\n\n正在处理，请稍候。", self._delivery_result_markup())
         found = self._find_delivery_record(kind, identity)
         if not found:
             text = "这条投递记录已不存在或已过期。"
@@ -1272,7 +1282,6 @@ class OperationsUI:
                 )
         else:
             text = "投递操作与记录类型不匹配。"
-        update.callback_query.answer()
         self._render(update, "EFB 投递操作结果\n\n" + text, self._delivery_result_markup())
 
     def delivery_callback(self, update: Update, _context: CallbackContext):
@@ -1489,7 +1498,7 @@ class OperationsUI:
             return None
         return method()
 
-    def contact_center(self, update: Update, _context: CallbackContext, refresh: bool = False):
+    def contact_center(self, update: Update, _context: CallbackContext, refresh: bool = False, page: int = 0):
         if not self._allowed(update):
             return
         if refresh:
@@ -1510,8 +1519,61 @@ class OperationsUI:
         if snapshot is None:
             text = "EFB 未识别联系人\n\n当前 ComWechat 版本不支持联系人中心。"
         else:
-            text = format_contact_center(snapshot)
+            records = snapshot.get("unresolved", []) + snapshot.get("aliased", [])
+            pages = max(1, (len(records) + 4) // 5)
+            page = max(0, min(page, pages - 1))
+            selected = records[page * 5:page * 5 + 5]
+            subset = dict(snapshot, unresolved=[item for item in selected if not item.get("alias")],
+                          aliased=[item for item in selected if item.get("alias")])
+            text = format_contact_center(subset)
+            text += (f"\n\n第 {page + 1}/{pages} 页｜"
+                     f"未识别共 {snapshot.get('unresolved_count', len(snapshot.get('unresolved', [])))} 条｜"
+                     f"别名共 {snapshot.get('aliased_count', len(snapshot.get('aliased', [])))} 条")
+            rows = []
+            for index, item in enumerate(selected, start=page * 5 + 1):
+                identity = hashlib.sha256(item["uid"].encode()).hexdigest()[:16]
+                self._contact_sessions[identity] = item["uid"]
+                rows.append([InlineKeyboardButton(f"查看识别详情 {index}", callback_data="ops:contact:" + identity)])
+            while len(self._contact_sessions) > 512:
+                self._contact_sessions.pop(next(iter(self._contact_sessions)))
+            navigation = []
+            if page:
+                navigation.append(InlineKeyboardButton("上一页", callback_data=f"ops:contacts-page:{page - 1}"))
+            if page + 1 < pages:
+                navigation.append(InlineKeyboardButton("下一页", callback_data=f"ops:contacts-page:{page + 1}"))
+            if navigation:
+                rows.append(navigation)
+            rows.extend(self.contact_markup().inline_keyboard)
+            self._render(update, text, InlineKeyboardMarkup(rows))
+            return
         self._render(update, text, self.contact_markup())
+
+    def contact_detail(self, update, identity, refresh=False, alias_help=False):
+        wxid = self._contact_sessions.get(identity)
+        if not wxid:
+            raise ValueError("联系人页面已过期，请重新打开联系人中心")
+        method = getattr(self._comwechat_channel(), "contact_identity_detail", None)
+        if not callable(method):
+            raise ValueError("ComWechat 尚未提供识别详情接口")
+        if refresh:
+            self._render(update, "正在重新识别这一位联系人……", self.contact_markup())
+        item = method(wxid, refresh=refresh)
+        text = (f"EFB 联系人识别详情\n\n类型：{item['kind']}\n标识：{wxid}\n"
+                f"名称：{item['name']}\n名称来源：{item['source']}\n"
+                f"最近查询：{format_timestamp(item.get('queried_at'))}\n"
+                f"识别状态：{'已识别' if item.get('resolved') else '未识别'}\n"
+                f"查询结果：{item['reason']}\n"
+                f"历史名称：{'、'.join(item.get('history', [])[-5:]) or '暂无'}")
+        if refresh:
+            text += "\n\n本项检查已完成；30 秒内重复点击使用最近结果。"
+        if alias_help:
+            text += f"\n\n设置别名：/contact_alias {wxid} 名称\n清除别名：/contact_alias {wxid} -"
+        self._render(update, text, InlineKeyboardMarkup([
+            [InlineKeyboardButton("重新识别此项", callback_data="ops:contact-refresh:" + identity),
+             InlineKeyboardButton("设置别名", callback_data="ops:contact-alias:" + identity)],
+            [InlineKeyboardButton("返回联系人", callback_data="ops:contacts"),
+             InlineKeyboardButton("关闭", callback_data="ops:close")],
+        ]))
 
     def contacts(self, update: Update, context: CallbackContext):
         self.contact_center(update, context)
@@ -1565,7 +1627,7 @@ class OperationsUI:
             text = f"EFB 备份恢复演练\n\n当前状态：{format_restore_rehearsal_status(state)}。"
         self._send(update, text, "status", include_bridge=True)
 
-    def health_text(self) -> str:
+    def health_sections(self) -> dict:
         backup = backup_summary(self.data_root / "backups")
         state_root = self.data_root / "operations" / "state"
         delivery = load_json(state_root / "delivery.json")
@@ -1643,13 +1705,13 @@ class OperationsUI:
             "投递对账：已过期，当前数字按实时队列\n"
             if queue["reconcile_stale"] else ""
         )
-        return (
-            "EFB 综合状态\n\n"
+        return {"runtime": (
             "【运行环境】\n"
             f"运行时间：{format_uptime(self.started_at)}\n"
             f"镜像构建：{format_image_build_time(image.get('build_time'))}\n"
             f"GHCR latest：{format_latest_match(image)}\n"
-            "\n【微信与自动恢复】\n"
+        ), "settings": (
+            "【微信与自动恢复】\n"
             f"微信状态：{self._wechat_login()}\n"
             f"最近登录：{format_session_event(session_events, 'login')}\n"
             f"最近退出：{format_session_event(session_events, 'logout')}\n"
@@ -1664,7 +1726,8 @@ class OperationsUI:
             f"群成员姓名隐藏：{'开启' if spoiler_enabled else '关闭'}\n"
             f"图片感知：{image_perception_text}\n"
             f"微信自动已读：{wechat_read_text}\n"
-            "\n【消息投递】\n"
+        ), "delivery": (
+            "【消息投递】\n"
             f"最近消息活动：{last_delivery}\n"
             f"队列最近延迟：{format_queue_latency(delivery)}\n"
             f"近24小时投递：\n{delivery_stats_lines}\n"
@@ -1673,7 +1736,8 @@ class OperationsUI:
             f"Bridge 队列：{bridge_summary}\n"
             f"视频号任务：{_finder_feed_summary(self.channel)}\n"
             f"失败附件已持久化：{queue['persisted_failed_media']} 条\n"
-            "\n【巡检与存储】\n"
+        ), "storage": (
+            "【巡检与存储】\n"
             f"投递审计：{format_audit_status(reconcile)}\n"
             f"数据库审计：{format_audit_status(database)}\n"
             f"容量审计：{format_audit_status(capacity)}\n"
@@ -1686,21 +1750,33 @@ class OperationsUI:
             f"NAS 磁盘剩余：{disk_text}\n"
             f"待评估上游更新：{updates} 项\n"
             f"配置备份：{backup['count']} 份｜{_human_size(backup['bytes'])}\n"
-            f"\n【组件版本】\n{component_versions}\n"
+        ), "components": (
+            f"【组件版本】\n{component_versions}\n"
             "\n【版本标识】\n"
             f"{os.getenv('EFB_IMAGE_REVISION', '未知')}"
-        )
+        )}
+
+    def health_text(self) -> str:
+        sections = self.health_sections()
+        return "EFB 综合状态\n\n" + "\n".join(sections.values())
+
+    def status_page(self, update, context, page="settings"):
+        if not self._allowed(update):
+            return
+        sections = self.health_sections()
+        titles = {"settings": "运行设置", "delivery": "投递统计", "components": "组件版本"}
+        if page not in titles:
+            return self.status(update, context)
+        content = sections[page]
+        if page == "settings":
+            content += "\n" + sections["storage"]
+        elif page == "components":
+            content = sections["runtime"] + "\n" + content
+        self._send(update, "EFB " + titles[page] + "\n\n" + content,
+                   "page:" + page, include_bridge=True, detailed=True)
 
     def health(self, update: Update, _context: CallbackContext):
-        if self._allowed(update):
-            self._send(
-                update,
-                self.health_text(),
-                "status",
-                include_bridge=True,
-                track_status_source=True,
-                detailed=True,
-            )
+        self.status_page(update, _context, "settings")
 
     def delivery_detail(self, update: Update, _context: CallbackContext):
         if not self._allowed(update):
@@ -1976,7 +2052,99 @@ class OperationsUI:
             detail = "未发现需要检查的敏感字段。"
         self._send(update, "EFB 配置安全检查\n\n" + detail + "\n\n只显示字段名，不显示字段值。", "security")
 
+    def _setting_adapter(self, key, target):
+        if key in {"wechat-read", "digest"}:
+            attribute = "wechat_read_ui" if key == "wechat-read" else "digest_guard"
+            settings = getattr(self.channel, attribute, None)
+            if settings is None:
+                raise ValueError("设置模块当前不可用")
+            return lambda: settings.enabled, settings.set_enabled
+        store = self.channel.delivery_policy_store
+        if key == "quiet-hours":
+            return store.quiet_hours, lambda value: store.set_quiet_hours(**value)
+        if key == "policy":
+            def setter(value):
+                rule = store.list_rules().get(target, {})
+                store.set(target, DeliveryPolicy(value), name=rule.get("name", ""),
+                          chat_type=rule.get("type", ""))
+            return lambda: store.base_policy(target), setter
+        raise ValueError("不支持撤销此项设置")
+
+    @staticmethod
+    def _setting_value(value):
+        if isinstance(value, bool):
+            return "开启" if value else "关闭"
+        if isinstance(value, dict):
+            return f"{'开启' if value['enabled'] else '关闭'} {value['start']}-{value['end']}"
+        return {"normal": "正常接收", "silent": "静默接收", "filtered": "完全过滤"}.get(value, "未知")
+
+    def settings_history(self, update, context):
+        history = getattr(self.channel, "settings_history", None)
+        entries = history.entries() if history else []
+        lines = ["EFB 配置变更历史", ""]
+        for item in reversed(entries[-8:]):
+            lines.extend([
+                f"{format_timestamp(item['at'])}｜{SETTING_LABELS[item['key']]}",
+                f"{self._setting_value(item['before'])} → {self._setting_value(item['after'])}",
+            ])
+            if item["target"]:
+                lines.append("会话标识：" + item["target"])
+            if item.get("undone_at"):
+                lines.append("已撤销：" + format_timestamp(item["undone_at"]))
+            lines.append("")
+        if not entries:
+            lines.append("暂无记录。启用本功能后的设置修改才会记录。")
+        lines.append("记录范围：自动已读、静默摘要、夜间静默、会话接收策略。\n不记录凭据或消息正文。")
+        rows = []
+        if entries and not entries[-1].get("undone_at"):
+            rows.append([InlineKeyboardButton("撤销最近一次修改",
+                         callback_data="ops:undo:" + entries[-1]["id"])])
+        rows.append([InlineKeyboardButton("刷新", callback_data="ops:history"),
+                     InlineKeyboardButton("返回概览", callback_data="ops:status")])
+        self._render(update, "\n".join(lines), InlineKeyboardMarkup(rows))
+
+    def _undo_setting(self, update, context, identity, confirmed=False):
+        history = self.channel.settings_history
+        entries = history.entries()
+        if not entries or entries[-1]["id"] != identity or entries[-1].get("undone_at"):
+            raise ValueError("记录已变化，请刷新配置历史")
+        item = entries[-1]
+        if confirmed:
+            history.undo(identity, self._setting_adapter, update.effective_user.id)
+            self._render(update, "已撤销最近一次设置修改。\n消息和登录配置未改变。", self.markup("history"))
+        else:
+            self._render(update,
+                f"确认撤销：{SETTING_LABELS[item['key']]}\n"
+                f"{self._setting_value(item['after'])} → {self._setting_value(item['before'])}\n\n"
+                "仅恢复这一项设置；若设置已被其他操作修改，将拒绝覆盖。",
+                InlineKeyboardMarkup([[
+                    InlineKeyboardButton("确认撤销", callback_data="ops:undo-confirm:" + identity),
+                    InlineKeyboardButton("取消", callback_data="ops:history"),
+                ]]))
+
     def callback(self, update: Update, context: CallbackContext):
+        query = update.callback_query
+        if not query or not self._allowed(update):
+            if query:
+                query.answer("无权执行", show_alert=True)
+            return
+        # Synchronous PTB adapters run in worker threads, never in the event loop.
+        lock = getattr(self, "_operation_lock", None)
+        if lock is None:
+            self._operation_lock = lock = threading.Lock()
+        if not lock.acquire(blocking=False):
+            query.answer("正在处理上一项操作，请稍候", show_alert=True)
+            return
+        try:
+            self._callback(update, context)
+        except Exception as error:
+            if "Message is not modified" in str(error):
+                return
+            self._render(update, "操作未完成：" + redact_error(error) + "\n请刷新后重试。", self.markup("status"))
+        finally:
+            lock.release()
+
+    def _callback(self, update: Update, context: CallbackContext):
         query = update.callback_query
         if not query or not self._allowed(update):
             return
@@ -1988,12 +2156,31 @@ class OperationsUI:
             self.backup_callback(update)
             return
         action = data.split(":", 1)[-1]
+        if action.startswith("contacts-page:"):
+            query.answer()
+            self.contact_center(update, context, page=int(action.split(":", 1)[1]))
+            return
+        if action.startswith(("contact:", "contact-refresh:", "contact-alias:")):
+            name, identity = action.split(":", 1)
+            query.answer("正在读取联系人信息")
+            self.contact_detail(update, identity, name == "contact-refresh", name == "contact-alias")
+            return
+        if action.startswith("page:"):
+            query.answer("正在读取状态")
+            self.status_page(update, context, action.split(":", 1)[1])
+            return
+        if action.startswith(("undo:", "undo-confirm:")):
+            name, identity = action.split(":", 1)
+            query.answer("正在读取设置")
+            self._undo_setting(update, context, identity, name == "undo-confirm")
+            return
         if action == "wechat-read-toggle":
             settings = getattr(self.channel, "wechat_read_ui", None)
             if settings is None:
                 query.answer("微信自动已读当前不可用", show_alert=True)
                 return
-            settings.set_enabled(not settings.enabled)
+            apply_setting(self.channel, "wechat-read", "", lambda: settings.enabled,
+                          settings.set_enabled, not settings.enabled, update.effective_user.id)
             query.answer("微信自动已读已开启" if settings.enabled else "微信自动已读已关闭")
             self.status(update, context)
             return
@@ -2002,7 +2189,8 @@ class OperationsUI:
             if digest is None:
                 query.answer("静默投递摘要当前不可用", show_alert=True)
                 return
-            digest.set_enabled(not digest.enabled)
+            apply_setting(self.channel, "digest", "", lambda: digest.enabled,
+                          digest.set_enabled, not digest.enabled, update.effective_user.id)
             query.answer("静默投递摘要已开启" if digest.enabled else "静默投递摘要已关闭")
             self.status(update, context)
             return
@@ -2027,6 +2215,7 @@ class OperationsUI:
                         logger.warning("状态命令消息删除失败: %s", error)
             return
         handlers = {
+            "history": self.settings_history,
             "health": self.health,
             "status": self.status,
             "status-detail": self.status_detail,
@@ -2048,7 +2237,9 @@ class OperationsUI:
         if action == "contacts-refresh":
             query.answer("已开始刷新联系人，请稍候……")
         else:
-            query.answer()
+            query.answer("正在处理，请稍候" if action in {"selftest", "security", "diagnostic"} else None)
         handler = handlers.get(action)
         if handler:
+            if action in {"selftest", "security"}:
+                self._render(update, "EFB 操作处理中\n\n正在检查，完成后将在此显示结果。", self.markup())
             handler(update, context)

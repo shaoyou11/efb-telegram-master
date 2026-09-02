@@ -46,6 +46,7 @@ from .db import DatabaseManager
 from .delivery_policy import DeliveryPolicyStore
 from .delivery_policy_ui import DeliveryPolicyUI
 from .operations_ui import OperationsUI
+from .settings_history import SettingsHistory
 from .delivery_telemetry import DeliveryGuard, DigestGuard, delivery_stats_summary
 from .master_message import MasterMessageProcessor
 from .member_color_ui import MemberColorUI
@@ -156,6 +157,9 @@ class TelegramChannel(MasterChannel):
         )
         self.image_perception = ImagePerception(
             self.db, data_root / "operations" / "state" / "image-perception.json"
+        )
+        self.settings_history = SettingsHistory(
+            Path(os.getenv("EFB_DATA_ROOT", "/data")) / "operations" / "state" / "settings-history.json"
         )
         self.delivery_policy_ui = DeliveryPolicyUI(self)
         self.operations_ui = OperationsUI(self)

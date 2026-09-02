@@ -649,17 +649,17 @@ def test_status_markup_exposes_compact_detail_and_new_operations():
     markup = OperationsUI.markup("status", include_bridge=True)
 
     assert [button.text for button in markup.inline_keyboard[0]] == [
-        "详细状态", "投递明细", "异常中心",
+        "概览", "投递统计", "组件版本", "运行设置",
     ]
     assert [button.text for button in markup.inline_keyboard[1]] == [
-        "深度自检", "联系人中心", "失败诊断",
+        "配置历史", "投递明细", "异常中心",
     ]
     callbacks = [
         button.callback_data
         for row in markup.inline_keyboard
         for button in row
     ]
-    assert "ops:status-detail" in callbacks
+    assert "ops:page:settings" in callbacks
     assert "ops:selftest" in callbacks
     assert "ops:contacts" in callbacks
     assert "ops:restore-rehearsal" in callbacks
