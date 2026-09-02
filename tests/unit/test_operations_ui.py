@@ -60,6 +60,18 @@ def test_status_markup_has_one_global_wechat_auto_read_switch():
     assert read_buttons[0].text == "微信自动已读：关"
 
 
+def test_status_markup_has_disabled_digest_switch_by_default():
+    markup = OperationsUI.markup("status", include_bridge=True)
+    buttons = [button for row in markup.inline_keyboard for button in row]
+    digest_buttons = [
+        button for button in buttons
+        if button.callback_data == "ops:digest-toggle"
+    ]
+
+    assert len(digest_buttons) == 1
+    assert digest_buttons[0].text == "静默摘要：关"
+
+
 def test_component_versions_do_not_invent_missing_revisions(monkeypatch):
     for key in (
         "EFB_CORE_REVISION",

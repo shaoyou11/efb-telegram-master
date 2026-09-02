@@ -872,6 +872,7 @@ class OperationsUI:
         include_bridge: bool = False,
         detailed: bool = False,
         wechat_read_enabled: bool = False,
+        digest_enabled: bool = False,
     ) -> InlineKeyboardMarkup:
         rows = []
         if include_bridge:
@@ -898,6 +899,12 @@ class OperationsUI:
                     "微信自动已读：开" if wechat_read_enabled else "微信自动已读：关",
                     callback_data="ops:wechat-read-toggle",
                 ),
+                InlineKeyboardButton(
+                    "静默摘要：开" if digest_enabled else "静默摘要：关",
+                    callback_data="ops:digest-toggle",
+                ),
+            ])
+            rows.append([
                 InlineKeyboardButton("恢复演练", callback_data="ops:restore-rehearsal"),
             ])
             rows.append([
@@ -924,11 +931,13 @@ class OperationsUI:
         detailed: bool = False,
     ):
         wechat_read = getattr(self.channel, "wechat_read_ui", None)
+        digest = getattr(self.channel, "digest_guard", None)
         markup = self.markup(
             refresh,
             include_bridge=include_bridge,
             detailed=detailed,
             wechat_read_enabled=bool(getattr(wechat_read, "enabled", False)),
+            digest_enabled=bool(getattr(digest, "enabled", False)),
         )
         if update.callback_query:
             result = update.callback_query.edit_message_text(text, reply_markup=markup)
@@ -1991,6 +2000,15 @@ class OperationsUI:
                 return
             settings.set_enabled(not settings.enabled)
             query.answer("微信自动已读已开启" if settings.enabled else "微信自动已读已关闭")
+            self.status(update, context)
+            return
+        if action == "digest-toggle":
+            digest = getattr(self.channel, "digest_guard", None)
+            if digest is None:
+                query.answer("静默投递摘要当前不可用", show_alert=True)
+                return
+            digest.set_enabled(not digest.enabled)
+            query.answer("静默投递摘要已开启" if digest.enabled else "静默投递摘要已关闭")
             self.status(update, context)
             return
         if action in {"close", "status-close"}:

@@ -209,11 +209,26 @@ def test_digest_guard_establishes_baseline_then_reports_only_new_counts(tmp_path
     stats = {"silent": 2, "filtered": 1, "failed": 0}
     guard = DigestGuard(Channel(), tmp_path / "digest.json", lambda: stats, interval=60)
 
-    assert guard.check_once(now=100) == "baseline"
+    assert guard.check_once(now=100) == "disabled"
+    assert guard.enabled is False
+    guard.set_enabled(True, now=100)
     stats.update({"silent": 3, "failed": 1})
     assert guard.check_once(now=401) == "sent"
     assert "静默接收：1 条" in Channel.bot_manager.messages[0][1]
     assert "失败：1 条" in Channel.bot_manager.messages[0][1]
+
+
+def test_digest_guard_defaults_existing_state_to_disabled(tmp_path):
+    state_path = tmp_path / "digest.json"
+    state_path.write_text(
+        json.dumps({"silent": 2, "filtered": 1, "failed": 0, "checked_at": 100}),
+        encoding="utf-8",
+    )
+
+    guard = DigestGuard(None, state_path, lambda: {"silent": 3}, interval=60)
+
+    assert guard.enabled is False
+    assert guard.check_once(now=401) == "disabled"
 
 
 def test_delivery_stats_ignore_buckets_older_than_24_hours(tmp_path, monkeypatch):
