@@ -740,7 +740,8 @@ def format_contact_center(snapshot: dict) -> str:
     lines = [
         "EFB 未识别联系人",
         "",
-        f"未识别：{len(unresolved)} 条｜本地别名：{len(aliased)} 条",
+        f"未识别：{snapshot.get('unresolved_count', len(unresolved))} 条｜"
+        f"本地别名：{snapshot.get('aliased_count', len(aliased))} 条",
     ]
     refresh = snapshot.get("refresh") if isinstance(snapshot.get("refresh"), dict) else None
     if refresh:
@@ -751,7 +752,7 @@ def format_contact_center(snapshot: dict) -> str:
             f"新识别 {int(refresh.get('resolved', 0) or 0)}｜"
             f"剩余 {int(refresh.get('remaining', len(unresolved)) or 0)}"
         )
-    for index, item in enumerate(unresolved, start=1):
+    for index, item in enumerate(unresolved, start=1 + snapshot.get("offset", 0)):
         history = item.get("history") if isinstance(item.get("history"), list) else []
         lines.extend([
             "",
@@ -761,7 +762,7 @@ def format_contact_center(snapshot: dict) -> str:
             f"当前名称：{_clean_text(item.get('name'), 80)}",
             f"历史名称：{_clean_text('、'.join(str(name) for name in history[-5:]), 120)}",
         ])
-    for index, item in enumerate(aliased, start=1):
+    for index, item in enumerate(aliased, start=1 + snapshot.get("offset", 0) + len(unresolved)):
         history = item.get("history") if isinstance(item.get("history"), list) else []
         lines.extend([
             "",
@@ -872,6 +873,7 @@ class OperationsUI:
         )
         self._status_source_messages = {}
         self._operation_lock = threading.Lock()
+        self._operation_completed = {}
         self._contact_sessions = {}
 
     @staticmethod
@@ -1524,7 +1526,9 @@ class OperationsUI:
             page = max(0, min(page, pages - 1))
             selected = records[page * 5:page * 5 + 5]
             subset = dict(snapshot, unresolved=[item for item in selected if not item.get("alias")],
-                          aliased=[item for item in selected if item.get("alias")])
+                          aliased=[item for item in selected if item.get("alias")], offset=page * 5,
+                          unresolved_count=snapshot.get("unresolved_count", len(snapshot.get("unresolved", []))),
+                          aliased_count=snapshot.get("aliased_count", len(snapshot.get("aliased", []))))
             text = format_contact_center(subset)
             text += (f"\n\n第 {page + 1}/{pages} 页｜"
                      f"未识别共 {snapshot.get('unresolved_count', len(snapshot.get('unresolved', [])))} 条｜"
@@ -2135,8 +2139,28 @@ class OperationsUI:
         if not lock.acquire(blocking=False):
             query.answer("正在处理上一项操作，请稍候", show_alert=True)
             return
+        action = str(getattr(query, "data", "") or "")
+        repeat_guard = (action in {"ops:contacts-refresh", "ops:selftest", "ops:security",
+                                   "ops:restart-all", "ops:restore-rehearsal",
+                                   "ops:wechat-read-toggle", "ops:digest-toggle"}
+                        or action.startswith(("ops:contact-refresh:", "ops:undo-confirm:",
+                                              "ops:delivery:push-confirm:", "ops:delivery:retry-confirm:",
+                                              "ops:delivery:delete-confirm:")))
+        message = getattr(query, "message", None)
+        identity = (getattr(getattr(message, "chat", None), "id", None),
+                    getattr(message, "message_id", None), action)
+        completed = getattr(self, "_operation_completed", {})
         try:
+            if repeat_guard and time.monotonic() - completed.get(identity, -100) < 4:
+                query.answer("刚刚已处理此项操作，请查看结果", show_alert=True)
+                return
             self._callback(update, context)
+            if repeat_guard:
+                completed.pop(identity, None)
+                completed[identity] = time.monotonic()
+                while len(completed) > 128:
+                    completed.pop(next(iter(completed)))
+                self._operation_completed = completed
         except Exception as error:
             if "Message is not modified" in str(error):
                 return

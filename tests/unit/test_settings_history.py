@@ -112,3 +112,19 @@ def test_contact_list_is_paged_and_details_are_addressable():
     actions = [b.callback_data for row in markup.inline_keyboard for b in row]
     assert len([action for action in actions if action.startswith("ops:contact:")]) == 5
     assert "ops:contacts-page:1" in actions
+    ui.contact_center(SimpleNamespace(effective_user=SimpleNamespace(id=1)), None, page=1)
+    assert "未识别 #6" in sent[-1][0]
+    assert "未识别：16 条" in sent[-1][0]
+
+
+def test_queued_duplicate_click_does_not_repeat_operation():
+    ui = OperationsUI(SimpleNamespace(config={"admins": [1]}))
+    calls, answers = [], []
+    ui._callback = lambda *args: calls.append(True)
+    query = SimpleNamespace(data="ops:digest-toggle",
+                            answer=lambda *a, **k: answers.append(a))
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=1), callback_query=query)
+    ui.callback(update, None)
+    ui.callback(update, None)
+    assert calls == [True]
+    assert "刚刚已处理" in answers[0][0]
