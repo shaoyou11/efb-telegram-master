@@ -67,6 +67,25 @@ class DeliveryPolicyStore:
     def quiet_hours(self) -> dict:
         return self._settings["quiet_hours"].copy()
 
+    def base_policy(self, chat_key: str) -> str:
+        return self._rules.get(chat_key, {}).get("policy", DeliveryPolicy.NORMAL.value)
+
+    def explain(self, chat_key: str, now: Optional[datetime] = None) -> dict:
+        instant = now or datetime.now()
+        base = self.base_policy(chat_key)
+        effective = self.get(chat_key, instant)
+        quiet = self._quiet_active(instant)
+        if base == DeliveryPolicy.FILTERED.value:
+            reason = "会话设置为完全过滤，优先于夜间静默"
+        elif quiet:
+            reason = "命中夜间静默时段"
+        elif chat_key in self._rules:
+            reason = "命中会话独立接收策略"
+        else:
+            reason = "未设置独立规则，使用默认正常接收"
+        return {"base": base, "effective": effective.value,
+                "reason": reason, "quiet_hours": self.quiet_hours(), "at": instant.isoformat()}
+
     def set_quiet_hours(self, start: str, end: str, enabled: bool) -> None:
         time.fromisoformat(start)
         time.fromisoformat(end)

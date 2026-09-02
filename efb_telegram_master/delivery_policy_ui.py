@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from ehforwarderbot import coordinator
@@ -7,6 +8,7 @@ from telegram.ext import CallbackContext
 
 from . import utils
 from .delivery_policy import DeliveryPolicy
+from .settings_history import apply_setting
 
 
 POLICY_LABELS = {
@@ -32,7 +34,8 @@ def build_policy_keyboard(current: DeliveryPolicy) -> InlineKeyboardMarkup:
         buttons.append(InlineKeyboardButton(label, callback_data=f"filter:set:{policy.value}"))
     return InlineKeyboardMarkup([
         buttons,
-        [InlineKeyboardButton("恢复默认", callback_data="filter:reset")],
+        [InlineKeyboardButton("规则预览", callback_data="filter:preview"),
+         InlineKeyboardButton("恢复默认", callback_data="filter:reset")],
         [InlineKeyboardButton("返回", callback_data="filter:back"),
          InlineKeyboardButton("关闭", callback_data="filter:close")],
     ])
@@ -165,7 +168,7 @@ class DeliveryPolicyUI:
             InlineKeyboardButton("联系人", callback_data="filter:view:contact"),
         ])
         quiet = self.store.quiet_hours()
-        quiet_label = "关闭夜间静默" if quiet["enabled"] else "开启夜间静默 23:00-07:00"
+        quiet_label = "关闭夜间静默" if quiet["enabled"] else f"开启夜间静默 {quiet['start']}-{quiet['end']}"
         rows.insert(2, [InlineKeyboardButton(quiet_label, callback_data="filter:quiet:toggle")])
         if view == "mp" and chats:
             rows.insert(3, [
@@ -210,6 +213,35 @@ class DeliveryPolicyUI:
         text, markup = self._detail_content(chat)
         query.edit_message_text(text=text, reply_markup=markup)
 
+    def _set_policy(self, chat, policy, actor):
+        key = utils.chat_id_to_str(chat=chat)
+        apply_setting(self.channel, "policy", key, lambda: self.store.base_policy(key),
+                      lambda value: self.store.set(key, DeliveryPolicy(value), name=chat.long_name,
+                                                   chat_type=chat.__class__.__name__),
+                      policy.value, actor)
+
+    def _preview(self, query, chat, value=""):
+        now = datetime.now()
+        if value in {"12", "23"}:
+            now = now.replace(hour=int(value), minute=0, second=0, microsecond=0)
+        result = self.store.explain(utils.chat_id_to_str(chat=chat), now)
+        quiet = result["quiet_hours"]
+        text = (f"接收规则预览（只读）\n\n会话：{chat.long_name}\n"
+                f"模拟时间：{now:%m-%d %H:%M}\n"
+                f"会话策略：{POLICY_LABELS[DeliveryPolicy(result['base'])]}\n"
+                f"夜间静默：{'开启' if quiet['enabled'] else '关闭'} {quiet['start']}-{quiet['end']}\n"
+                f"接收结果：{POLICY_LABELS[DeliveryPolicy(result['effective'])]}\n"
+                f"匹配原因：{result['reason']}\n\n"
+                "仅预览会话接收和夜间静默规则；不发送消息、不修改设置。"
+                "不包含其他中间件规则或实际投递故障。")
+        query.edit_message_text(text=text, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("当前时间", callback_data="filter:preview"),
+             InlineKeyboardButton("中午 12 点", callback_data="filter:preview:12"),
+             InlineKeyboardButton("夜间 23 点", callback_data="filter:preview:23")],
+            [InlineKeyboardButton("返回设置", callback_data="filter:detail"),
+             InlineKeyboardButton("关闭", callback_data="filter:close")],
+        ]))
+
     def callback(self, update: Update, context: CallbackContext):
         query = update.callback_query
         if not query or not query.data or not query.message:
@@ -247,7 +279,9 @@ class DeliveryPolicyUI:
             return
         if name == "quiet":
             quiet = self.store.quiet_hours()
-            self.store.set_quiet_hours("23:00", "07:00", not quiet["enabled"])
+            apply_setting(self.channel, "quiet-hours", "", self.store.quiet_hours,
+                          lambda value: self.store.set_quiet_hours(**value),
+                          dict(quiet, enabled=not quiet["enabled"]), update.effective_user.id)
             self._render_list(*key)
             return
         if name == "bulk":
@@ -269,8 +303,7 @@ class DeliveryPolicyUI:
                 return
             policy = DeliveryPolicy(value)
             for chat in session["chats"]:
-                self.store.set(utils.chat_id_to_str(chat=chat), policy,
-                               name=chat.long_name, chat_type=chat.__class__.__name__)
+                self._set_policy(chat, policy, update.effective_user.id)
             self._render_list(*key)
             return
         if name == "backlist":
@@ -292,9 +325,11 @@ class DeliveryPolicyUI:
             return
         chat = session["chats"][selected]
         chat_key = utils.chat_id_to_str(chat=chat)
+        if name == "preview":
+            self._preview(query, chat, value)
+            return
         if name == "reset":
-            self.store.reset(chat_key)
+            self._set_policy(chat, DeliveryPolicy.NORMAL, update.effective_user.id)
         elif name == "set":
-            self.store.set(chat_key, DeliveryPolicy(value), name=chat.long_name,
-                           chat_type=chat.__class__.__name__)
+            self._set_policy(chat, DeliveryPolicy(value), update.effective_user.id)
         self._render_detail(query, chat)
