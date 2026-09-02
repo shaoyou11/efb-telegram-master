@@ -759,17 +759,33 @@ class DigestGuard:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         DeliveryTelemetry._atomic_json(self.state_path, data, ".digest.")
 
+    @property
+    def enabled(self) -> bool:
+        return bool(self._load().get("enabled", False))
+
+    def set_enabled(self, enabled: bool, now=None) -> None:
+        now = time.time() if now is None else float(now)
+        if enabled:
+            current = self.stats_loader()
+            self._save({**current, "checked_at": now, "enabled": True})
+            return
+        state = self._load()
+        self._save({**state, "enabled": False})
+
     def check_once(self, now=None):
         now = time.time() if now is None else float(now)
-        current = self.stats_loader()
         previous = self._load()
         if not previous:
-            self._save({**current, "checked_at": now})
-            return "baseline"
+            current = self.stats_loader()
+            self._save({**current, "checked_at": now, "enabled": False})
+            return "disabled"
+        if not previous.get("enabled", False):
+            return "disabled"
+        current = self.stats_loader()
         if now - float(previous.get("checked_at", 0) or 0) < self.interval:
             return "wait"
         delta = digest_delta(current, previous)
-        self._save({**current, "checked_at": now})
+        self._save({**current, "checked_at": now, "enabled": True})
         if not any(delta.values()):
             return "empty"
         text = (
