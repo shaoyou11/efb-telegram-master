@@ -259,8 +259,10 @@ def format_component_versions(image: dict, bridge: dict) -> str:
          format_image_build_time(watchdog.get("build_time") or os.getenv("EFB_WATCHDOG_BUILD_TIME")),
          component_match(watchdog, os.getenv("EFB_WATCHDOG_GHCR_MATCH", "未校验"))),
     )
-    return "\n".join(
-        f"  {name}: {version}｜rev {_revision_text(revision)}｜构建 {build}｜{match}"
+    return "\n\n".join(
+        f"{name}：{version.removeprefix(name + ' ')}\n"
+        f"  提交：{_revision_text(revision)}｜镜像：{match}\n"
+        f"  构建：{build}"
         for name, version, revision, build, match in rows
     )
 
@@ -433,10 +435,10 @@ def format_delivery_stats(stats: dict) -> str:
     p95_text = latency_text(stats.get("p95_latency_ms"))
     sections = [
         f"微信接收 {int(stats.get('inbound', 0) or 0)}｜"
-        f"Telegram成功 {int(stats.get('delivered', 0) or 0)}｜"
+        f"Telegram成功 {int(stats.get('delivered', 0) or 0)}\n"
         f"过滤 {int(stats.get('filtered', 0) or 0)}｜"
         f"静默 {int(stats.get('silent', 0) or 0)}｜"
-        f"失败 {int(stats.get('failed', 0) or 0)}｜"
+        f"失败 {int(stats.get('failed', 0) or 0)}\n"
         f"平均延迟 {average_text}｜P95延迟 {p95_text}"
     ]
     sections.append(f"最近成功 {format_timestamp(stats.get('last_success_at'))}")
@@ -458,19 +460,20 @@ def format_delivery_stats(stats: dict) -> str:
         ):
             continue
         detail = (
-            f"{labels[key]} 收{int(item.get('inbound', 0) or 0)}/"
-            f"成{int(item.get('delivered', 0) or 0)}/"
-            f"滤{int(item.get('filtered', 0) or 0)}/"
-            f"默{int(item.get('silent', 0) or 0)}/"
-            f"败{int(item.get('failed', 0) or 0)}"
+            f"\n{labels[key]}\n"
+            f"  接收 {int(item.get('inbound', 0) or 0)}｜"
+            f"成功 {int(item.get('delivered', 0) or 0)}｜"
+            f"失败 {int(item.get('failed', 0) or 0)}\n"
+            f"  过滤 {int(item.get('filtered', 0) or 0)}｜"
+            f"静默 {int(item.get('silent', 0) or 0)}"
         )
         detail += (
-            f"/均{latency_text(item.get('average_latency_ms'))}"
-            f"/P95 {latency_text(item.get('p95_latency_ms'))}"
+            f"\n  平均延迟 {latency_text(item.get('average_latency_ms'))}｜"
+            f"P95延迟 {latency_text(item.get('p95_latency_ms'))}"
         )
-        detail += f"/最近{format_timestamp(item.get('last_success_at'))}"
+        detail += f"\n  最近成功 {format_timestamp(item.get('last_success_at'))}"
         sections.append(detail)
-    return "｜".join(sections)
+    return "\n".join(sections)
 
 
 def format_backup_verification(report: dict) -> str:
@@ -906,8 +909,6 @@ class OperationsUI:
             ])
             rows.append([
                 InlineKeyboardButton("恢复演练", callback_data="ops:restore-rehearsal"),
-            ])
-            rows.append([
                 InlineKeyboardButton("关闭并删除", callback_data="ops:status-close"),
             ])
         else:
@@ -1605,12 +1606,7 @@ class OperationsUI:
         bridge_summary = self._bridge_queue_summary(bridge_health)
         component_versions = format_component_versions(image, bridge_health)
         delivery_stats = delivery_stats_summary(state_root)
-        version_lines = "\n".join(
-            f"  {item}" for item in runtime_version_text().split("｜")
-        )
-        delivery_stats_lines = "\n".join(
-            f"  {item}" for item in format_delivery_stats(delivery_stats).split("｜")
-        )
+        delivery_stats_lines = format_delivery_stats(delivery_stats)
         updates = upstream.get("update_count", 0)
         if watchdog:
             recovery_text = (
@@ -1652,8 +1648,6 @@ class OperationsUI:
             "【运行环境】\n"
             f"运行时间：{format_uptime(self.started_at)}\n"
             f"镜像构建：{format_image_build_time(image.get('build_time'))}\n"
-            f"运行版本：\n{version_lines}\n"
-            f"组件状态：\n{component_versions}\n"
             f"GHCR latest：{format_latest_match(image)}\n"
             "\n【微信与自动恢复】\n"
             f"微信状态：{self._wechat_login()}\n"
@@ -1692,6 +1686,7 @@ class OperationsUI:
             f"NAS 磁盘剩余：{disk_text}\n"
             f"待评估上游更新：{updates} 项\n"
             f"配置备份：{backup['count']} 份｜{_human_size(backup['bytes'])}\n"
+            f"\n【组件版本】\n{component_versions}\n"
             "\n【版本标识】\n"
             f"{os.getenv('EFB_IMAGE_REVISION', '未知')}"
         )

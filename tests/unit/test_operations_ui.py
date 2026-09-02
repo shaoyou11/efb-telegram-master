@@ -72,6 +72,17 @@ def test_status_markup_has_disabled_digest_switch_by_default():
     assert digest_buttons[0].text == "静默摘要：关"
 
 
+def test_status_markup_combines_last_two_actions():
+    for detailed in (False, True):
+        markup = OperationsUI.markup(include_bridge=True, detailed=detailed)
+        assert [button.text for button in markup.inline_keyboard[-1]] == [
+            "恢复演练", "关闭并删除",
+        ]
+        assert [button.callback_data for button in markup.inline_keyboard[-1]] == [
+            "ops:restore-rehearsal", "ops:status-close",
+        ]
+
+
 def test_component_versions_do_not_invent_missing_revisions(monkeypatch):
     for key in (
         "EFB_CORE_REVISION",
@@ -90,9 +101,10 @@ def test_component_versions_do_not_invent_missing_revisions(monkeypatch):
         },
     )
 
-    assert "EFB:" in text
-    assert "ComWechat: 3.9.12.16｜rev abcdef123456" in text
-    assert "rev 未提供" in text
+    assert "EFB：" in text
+    assert "ComWechat：3.9.12.16\n  提交：abcdef123456" in text
+    assert "提交：未提供" in text
+    assert "构建：2026-08-31" in text
 
 
 def test_component_versions_use_persisted_container_metadata():
@@ -118,9 +130,9 @@ def test_component_versions_use_persisted_container_metadata():
         {},
     )
 
-    assert "Bot API: Bot API 10.3｜rev 1234567890ab" in text
-    assert "Watchdog: latest｜rev abcdef123456｜" in text
-    assert text.count("｜匹配") >= 2
+    assert "Bot API：10.3\n  提交：1234567890ab" in text
+    assert "Watchdog：latest\n  提交：abcdef123456｜" in text
+    assert text.count("｜镜像：匹配") >= 2
 
 
 def test_format_latest_match_accepts_legacy_verify_stack_field():
@@ -323,15 +335,37 @@ def test_status_text_summarizes_persistent_reports(tmp_path, monkeypatch):
     assert "数据库审计：正常" in text
     assert "上游审计：正常" in text
     assert "镜像构建：2026-08-09 21:11:16" in text
-    assert "运行版本：" in text
+    assert "【组件版本】" in text
+    assert "运行版本：" not in text
+    assert text.index("【组件版本】") > text.index("【巡检与存储】")
     assert "GHCR latest：匹配" in text
     assert "队列最近延迟：最近完成 1.25 秒" in text
-    assert "近24小时投递：\n  微信接收 3\n  Telegram成功 1" in text
+    assert "近24小时投递：\n微信接收 3｜Telegram成功 1\n" in text
     assert "备份校验：正常" in text
     assert "维护模式：关闭" in text
     assert "手动重启：暂无" in text
     assert "视频号任务：等待 1｜请求 2｜处理中 0｜失败 0" in text
     assert "微信自动已读：未启用" in text
+
+    category = {
+        "inbound": 9999, "delivered": 9999, "filtered": 9999,
+        "silent": 9999, "failed": 9999, "average_latency_ms": 1234,
+        "p95_latency_ms": 2345, "last_success_at": 4660,
+    }
+    monkeypatch.setattr(
+        "efb_telegram_master.operations_ui.delivery_stats_summary",
+        lambda _root: {
+            **category,
+            "by_type": {key: category for key in (
+                "text", "image", "video", "file", "public_account", "finder", "other",
+            )},
+        },
+    )
+    full_text = ui.health_text()
+    assert len(full_text.encode("utf-16-le")) // 2 < 4096
+    assert "\n公众号\n  接收 9999｜成功 9999｜失败 9999" in full_text
+    assert "\n其他\n" in full_text
+    assert "/成" not in full_text
 
 
 def test_compact_status_contains_operational_summary_without_detail_sections():
@@ -655,9 +689,10 @@ def test_delivery_stats_format_is_content_free():
             },
         },
     }) == (
-        "微信接收 2｜Telegram成功 1｜过滤 0｜静默 0｜失败 1｜"
-        f"平均延迟 850 毫秒｜P95延迟 1.20 秒｜最近成功 {last_success}｜"
-        f"文本 收2/成1/滤0/默0/败1/均850 毫秒/P95 1.20 秒/最近{last_success}"
+        "微信接收 2｜Telegram成功 1\n过滤 0｜静默 0｜失败 1\n"
+        f"平均延迟 850 毫秒｜P95延迟 1.20 秒\n最近成功 {last_success}\n"
+        "\n文本\n  接收 2｜成功 1｜失败 1\n  过滤 0｜静默 0\n"
+        f"  平均延迟 850 毫秒｜P95延迟 1.20 秒\n  最近成功 {last_success}"
     )
 
 
@@ -674,9 +709,10 @@ def test_delivery_stats_format_shows_completion_only_type_and_missing_success():
             },
         },
     }) == (
-        "微信接收 0｜Telegram成功 1｜过滤 0｜静默 0｜失败 0｜"
-        "平均延迟 暂无｜P95延迟 暂无｜最近成功 暂无｜"
-        "图片 收0/成1/滤0/默0/败0/均暂无/P95 暂无/最近暂无"
+        "微信接收 0｜Telegram成功 1\n过滤 0｜静默 0｜失败 0\n"
+        "平均延迟 暂无｜P95延迟 暂无\n最近成功 暂无\n"
+        "\n图片\n  接收 0｜成功 1｜失败 0\n  过滤 0｜静默 0\n"
+        "  平均延迟 暂无｜P95延迟 暂无\n  最近成功 暂无"
     )
 
 
