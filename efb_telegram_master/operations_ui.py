@@ -108,10 +108,13 @@ def format_trace_report(bridge_records: list, telegram_records: list, trace_filt
 
 
 def format_issues_report(logged_in: bool, queue: dict, bridge: dict,
-                         audits: dict, mapping_ok: bool, delivery_stats: dict = None) -> str:
+                         audits: dict, mapping_ok: bool, delivery_stats: dict = None,
+                         connection_note: str = "") -> str:
     issues = []
     if not logged_in:
         issues.append("- 微信未登录")
+    if connection_note:
+        issues.append(f"- 消息接收：{connection_note}")
     pending = int(queue.get("pending", 0) or 0)
     failed = int(queue.get("failed", 0) or 0)
     dead = int(bridge.get("dead_letter_size", 0) or 0)
@@ -687,6 +690,48 @@ def format_latest_match(metadata: dict) -> str:
     return f"{status}（最近校验{checked}）"
 
 
+def format_connection_status(watchdog: dict, live_login: str, delivery: dict = None) -> str:
+    connection = watchdog.get("connection") or {}
+    checked_at = connection.get("checked_at")
+    stamp = format_timestamp(checked_at)
+    if live_login == "已退出":
+        label = {
+            "waiting_scan": "等待扫码，自动恢复暂停",
+            "manual_attention": "等待人工确认，自动恢复暂停",
+        }.get(connection.get("state"), "微信离线，暂不能接收新消息")
+        if connection.get("stale") or not checked_at:
+            label = "微信离线，恢复状态待核实"
+        return label + "；队列为空不代表接收正常"
+    if live_login != "已登录":
+        return "登录检测失败，接收状态未知"
+    if connection.get("stale") or not checked_at:
+        return f"微信已登录；消息接口状态待复核（上次检查 {stamp}）"
+    if connection.get("state") != "online":
+        return "微信已登录；消息接口正在复核"
+    history = connection.get("history") or []
+    recovered = history[-1].get("recovered_at", 0) if history else 0
+    inbound = (delivery or {}).get("last_inbound_at", 0) or 0
+    if recovered and inbound <= recovered:
+        return "登录和消息接口已恢复，等待首条新消息验证"
+    return f"登录和消息接口检查通过（{stamp}）"
+
+
+def format_connection_history(watchdog: dict) -> str:
+    connection = watchdog.get("connection") or {}
+    lines = []
+    if connection.get("offline_since"):
+        lines.append(f"本次离线发现：{format_timestamp(connection['offline_since'])}")
+    for item in (connection.get("history") or [])[-3:]:
+        source = "自动恢复" if item.get("source") == "automatic" else "观察到恢复"
+        lines.append(
+            f"{format_timestamp(item.get('offline_since'))} 至 "
+            f"{format_timestamp(item.get('recovered_at'))}（{source}）"
+        )
+    if not lines:
+        return "暂无断线记录"
+    return "\n".join(lines) + "\n以上为检测到的接收中断区间，不代表消息已补齐。"
+
+
 def format_compact_status(snapshot: dict) -> str:
     return (
         "EFB 综合状态（精简）\n\n"
@@ -694,6 +739,7 @@ def format_compact_status(snapshot: dict) -> str:
         f"运行版本：{snapshot.get('versions', '未知')}\n"
         f"GHCR latest：{snapshot.get('latest', '未校验')}\n"
         f"微信：{snapshot.get('wechat', '未知')}\n"
+        f"消息接收：{snapshot.get('reception', '待检查')}\n"
         f"Telegram Bot API：{snapshot.get('bot_api', '未知')}\n"
         f"四容器与共享网络：{snapshot.get('stack', '未知')}\n"
         f"投递队列：{snapshot.get('queue', '未知')}\n"
@@ -1388,11 +1434,14 @@ class OperationsUI:
         maintenance = load_json(state_root / "maintenance.json")
         restore = load_json(state_root / "restore-rehearsal.json")
         queue = delivery_summary(self.data_root, reconcile)
+        login = self._wechat_login()
+        watchdog = self._watchdog_state()
         return {
             "uptime": format_uptime(self.started_at),
             "versions": runtime_version_text(),
             "latest": format_latest_match(image),
-            "wechat": self._wechat_login(),
+            "wechat": login,
+            "reception": format_connection_status(watchdog, login, delivery),
             "bot_api": self._bot_api(),
             "stack": "正常" if health.get("healthy") else health.get("reason", "等待检查"),
             "queue": f"待处理 {queue['pending']}｜失败 {queue['failed']}",
@@ -1653,6 +1702,8 @@ class OperationsUI:
             / "session-events.json"
         )
         watchdog = self._watchdog_state()
+        login = self._wechat_login()
+        reception = format_connection_status(watchdog, login, delivery)
         spoiler_store = getattr(self.channel, "author_name_spoiler_store", None)
         spoiler_enabled = bool(getattr(spoiler_store, "enabled", False))
         image_perception = getattr(self.channel, "image_perception", None)
@@ -1716,7 +1767,9 @@ class OperationsUI:
             f"GHCR latest：{format_latest_match(image)}\n"
         ), "settings": (
             "【微信与自动恢复】\n"
-            f"微信状态：{self._wechat_login()}\n"
+            f"微信状态：{login}\n"
+            f"消息接收：{reception}\n"
+            f"连接记录：\n{format_connection_history(watchdog)}\n"
             f"最近登录：{format_session_event(session_events, 'login')}\n"
             f"最近退出：{format_session_event(session_events, 'logout')}\n"
             f"Telegram Bot API：{self._bot_api()}\n"
@@ -1732,6 +1785,7 @@ class OperationsUI:
             f"微信自动已读：{wechat_read_text}\n"
         ), "delivery": (
             "【消息投递】\n"
+            f"接收状态：{reception}\n"
             f"最近消息活动：{last_delivery}\n"
             f"队列最近延迟：{format_queue_latency(delivery)}\n"
             f"近24小时投递：\n{delivery_stats_lines}\n"
@@ -1827,9 +1881,16 @@ class OperationsUI:
         }
         mapping_ok = bool(database_audit.get("healthy"))
         try:
-            logged_in = self._wechat_login() == "已登录"
+            login = self._wechat_login()
+            logged_in = login == "已登录"
         except Exception:
+            login = "检测失败"
             logged_in = False
+        watchdog = self._watchdog_state()
+        connection = watchdog.get("connection") or {}
+        connection_note = ""
+        if not logged_in or connection.get("state") != "online" or connection.get("stale"):
+            connection_note = format_connection_status(watchdog, login)
         self._send(
             update,
             format_issues_report(
@@ -1839,6 +1900,7 @@ class OperationsUI:
                 audits,
                 mapping_ok,
                 delivery_stats_summary(state_root),
+                connection_note,
             ),
             "errors",
         )

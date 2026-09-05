@@ -11,6 +11,8 @@ from efb_telegram_master.operations_ui import (
     delivery_summary,
     format_backup_verification,
     format_compact_status,
+    format_connection_status,
+    format_connection_history,
     format_component_versions,
     format_contact_center,
     format_delivery_stats,
@@ -37,6 +39,24 @@ def test_load_json_rejects_invalid_content(tmp_path):
     path = tmp_path / "report.json"
     path.write_text("invalid", encoding="utf-8")
     assert load_json(path) == {}
+
+
+def test_connection_status_distinguishes_offline_from_empty_queue():
+    assert "队列为空不代表接收正常" in format_connection_status({}, "已退出")
+    assert "状态未知" in format_connection_status({}, "检测失败")
+    assert "待复核" in format_connection_status({}, "已登录")
+
+
+def test_connection_status_requires_first_inbound_after_recovery():
+    state = {"connection": {
+        "state": "online", "checked_at": 200, "stale": False,
+        "history": [{"offline_since": 100, "recovered_at": 180}],
+    }}
+    assert "等待首条新消息" in format_connection_status(state, "已登录", {"last_inbound_at": 150})
+    assert "检查通过" in format_connection_status(state, "已登录", {"last_inbound_at": 190})
+    state["connection"]["stale"] = True
+    assert "待复核" in format_connection_status(state, "已登录", {"last_inbound_at": 190})
+    assert "不代表消息已补齐" in format_connection_history(state)
 
 
 def test_format_timestamp_handles_missing_value():
