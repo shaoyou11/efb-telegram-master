@@ -76,8 +76,9 @@ def test_login_prompt_is_tracked_and_deleted_after_successful_login():
         chat_id = 123
         message_id = 456
 
-        def edit_text(self, text):
+        def edit_text(self, text, **kwargs):
             self.text = text
+            self.markup = kwargs.get("reply_markup")
 
     class FakeMessage:
         def reply_text(self, text):
@@ -95,10 +96,28 @@ def test_login_prompt_is_tracked_and_deleted_after_successful_login():
     )
     control._login_prompt_messages = set()
 
-    with patch.object(WeChatControl, "call_extra", return_value="请扫描二维码登录"):
+    with patch.object(WeChatControl, "call_extra", return_value="请扫描二维码登录；二维码有效期内请勿重复发送 /login"):
         control.run_action(FakeMessage(), "reauth", "正在获取二维码")
 
     assert control._login_prompt_messages == {(123, 456)}
     assert control.cleanup_login_prompts() == 1
     assert deleted == [(123, 456)]
     assert control._login_prompt_messages == set()
+
+
+def test_qr_refresh_edits_existing_status_and_reports_progress():
+    from unittest.mock import Mock
+    control = WeChatControl.__new__(WeChatControl)
+    control.channel = SimpleNamespace(config={"admins": [1]})
+    control._login_prompt_messages = set()
+    message = Mock(chat_id=1, message_id=2)
+    query = Mock(data="wechat:login_refresh", message=message)
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=1), callback_query=query)
+    with patch.object(WeChatControl, "call_extra", return_value="登录二维码仍在有效期内，请使用上一张扫码") as extra:
+        control.callback(update, None)
+    query.answer.assert_called_once()
+    message.reply_text.assert_not_called()
+    assert message.edit_text.call_count == 2
+    extra.assert_called_once_with("reauth")
+    buttons = message.edit_text.call_args.kwargs["reply_markup"].inline_keyboard[0]
+    assert [item.text for item in buttons] == ["刷新二维码", "撤回二维码"]
