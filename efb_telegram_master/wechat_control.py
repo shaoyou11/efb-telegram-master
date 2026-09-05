@@ -35,6 +35,13 @@ def confirmation_keyboard():
     ])
 
 
+def login_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("刷新二维码", callback_data="wechat:login_refresh"),
+         InlineKeyboardButton("撤回二维码", callback_data="wechat:login_cancel")],
+    ])
+
+
 class WeChatControl:
     def __init__(self, channel):
         self.channel = channel
@@ -65,15 +72,23 @@ class WeChatControl:
             raise RuntimeError(f"ComWechat command is unavailable: {command}")
         return functions[command_name]("")
 
-    def run_action(self, message, command, pending_text):
-        status = message.reply_text(pending_text)
+    def run_action(self, message, command, pending_text, edit=False):
+        status = message if edit else message.reply_text(pending_text)
+        if edit:
+            status.edit_text(pending_text)
         try:
             result = self.call_extra(command)
-            if command == "reauth" and result == LOGIN_PROMPT_TEXT:
+            pending_login = command == "reauth" and str(result or "").startswith(
+                (LOGIN_PROMPT_TEXT, "登录二维码仍在有效期内", "登录二维码正在生成")
+            )
+            if pending_login:
                 self.track_login_prompt(status)
             else:
                 self.forget_login_prompt(status)
-            status.edit_text(result or "操作已完成。")
+            if pending_login:
+                status.edit_text(result, reply_markup=login_keyboard())
+            else:
+                status.edit_text(result or "操作已完成。")
         except Exception:
             LOGGER.exception("failed to execute ComWechat command: %s", command)
             self.forget_login_prompt(status)
@@ -119,6 +134,15 @@ class WeChatControl:
         if action == "close":
             query.answer()
             query.message.delete()
+            return
+        if action in ("login_refresh", "login_cancel"):
+            query.answer("正在处理，请稍候")
+            self.run_action(
+                query.message,
+                "reauth" if action == "login_refresh" else "cancel_login_qr",
+                "正在检查二维码……" if action == "login_refresh" else "正在撤回二维码……",
+                edit=True,
+            )
             return
         if action == "login":
             query.answer()
