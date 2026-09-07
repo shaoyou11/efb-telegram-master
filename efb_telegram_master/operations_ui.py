@@ -935,36 +935,34 @@ class OperationsUI:
             rows.append([
                 InlineKeyboardButton("概览", callback_data="ops:status"),
                 InlineKeyboardButton("投递统计", callback_data="ops:page:delivery"),
+                InlineKeyboardButton("投递明细", callback_data="ops:delivery"),
+                InlineKeyboardButton("Bridge 队列", callback_data="bridgeq:home"),
+            ])
+            rows.append([
                 InlineKeyboardButton("组件版本", callback_data="ops:page:components"),
                 InlineKeyboardButton("运行设置", callback_data="ops:page:settings"),
-            ])
-            rows.append([
-                InlineKeyboardButton("配置历史", callback_data="ops:history"),
-                InlineKeyboardButton("投递明细", callback_data="ops:delivery"),
                 InlineKeyboardButton("异常中心", callback_data="ops:errors"),
-            ])
-            rows.append([
-                InlineKeyboardButton("深度自检", callback_data="ops:selftest"),
-                InlineKeyboardButton("联系人中心", callback_data="ops:contacts"),
                 InlineKeyboardButton("失败诊断", callback_data="ops:diagnostic"),
             ])
-            row = [InlineKeyboardButton("Bridge 队列", callback_data="bridgeq:home")]
-            row.append(InlineKeyboardButton("全部重启", callback_data="ops:restart-all"))
-            if refresh:
-                row.append(InlineKeyboardButton("刷新", callback_data=f"ops:{refresh}"))
-            rows.append(row)
+            rows.append([
+                InlineKeyboardButton("联系人中心", callback_data="ops:contacts"),
+                InlineKeyboardButton("配置历史", callback_data="ops:history"),
+                InlineKeyboardButton("深度自检", callback_data="ops:selftest"),
+                InlineKeyboardButton("刷新", callback_data=f"ops:{refresh or 'status'}"),
+            ])
             rows.append([
                 InlineKeyboardButton(
-                    "微信自动已读：开" if wechat_read_enabled else "微信自动已读：关",
+                    "微信已读：开" if wechat_read_enabled else "微信已读：关",
                     callback_data="ops:wechat-read-toggle",
                 ),
                 InlineKeyboardButton(
                     "静默摘要：开" if digest_enabled else "静默摘要：关",
                     callback_data="ops:digest-toggle",
                 ),
+                InlineKeyboardButton("恢复演练", callback_data="ops:restore-rehearsal"),
             ])
             rows.append([
-                InlineKeyboardButton("恢复演练", callback_data="ops:restore-rehearsal"),
+                InlineKeyboardButton("全部重启", callback_data="ops:restart-all"),
                 InlineKeyboardButton("关闭并删除", callback_data="ops:status-close"),
             ])
         else:

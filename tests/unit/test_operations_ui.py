@@ -77,7 +77,7 @@ def test_status_markup_has_one_global_wechat_auto_read_switch():
     ]
 
     assert len(read_buttons) == 1
-    assert read_buttons[0].text == "微信自动已读：关"
+    assert read_buttons[0].text == "微信已读：关"
 
 
 def test_status_markup_has_disabled_digest_switch_by_default():
@@ -92,14 +92,14 @@ def test_status_markup_has_disabled_digest_switch_by_default():
     assert digest_buttons[0].text == "静默摘要：关"
 
 
-def test_status_markup_combines_last_two_actions():
+def test_status_markup_keeps_risky_actions_on_last_row():
     for detailed in (False, True):
         markup = OperationsUI.markup(include_bridge=True, detailed=detailed)
         assert [button.text for button in markup.inline_keyboard[-1]] == [
-            "恢复演练", "关闭并删除",
+            "全部重启", "关闭并删除",
         ]
         assert [button.callback_data for button in markup.inline_keyboard[-1]] == [
-            "ops:restore-rehearsal", "ops:status-close",
+            "ops:restart-all", "ops:status-close",
         ]
 
 
@@ -669,10 +669,13 @@ def test_status_markup_exposes_compact_detail_and_new_operations():
     markup = OperationsUI.markup("status", include_bridge=True)
 
     assert [button.text for button in markup.inline_keyboard[0]] == [
-        "概览", "投递统计", "组件版本", "运行设置",
+        "概览", "投递统计", "投递明细", "Bridge 队列",
     ]
     assert [button.text for button in markup.inline_keyboard[1]] == [
-        "配置历史", "投递明细", "异常中心",
+        "组件版本", "运行设置", "异常中心", "失败诊断",
+    ]
+    assert [button.text for button in markup.inline_keyboard[2]] == [
+        "联系人中心", "配置历史", "深度自检", "刷新",
     ]
     callbacks = [
         button.callback_data
