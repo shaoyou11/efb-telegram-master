@@ -118,7 +118,7 @@ def _sync_object_class(original_class):
                 finally:
                     _set_bot_tree(self, proxy)
 
-            return proxy._runner.submit(invoke())
+            return _bind_sync_bot(proxy._runner.submit(invoke()), proxy)
 
         sync_method.__name__ = name
         attributes[name] = sync_method
