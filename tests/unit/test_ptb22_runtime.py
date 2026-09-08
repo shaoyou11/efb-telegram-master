@@ -232,3 +232,49 @@ def test_real_application_processes_update_without_network():
         finally:
             runtime.stop()
             runtime.stop()
+
+
+def test_reply_result_can_be_edited_and_deleted_without_network():
+    calls = []
+
+    async def fake_post(_bot, endpoint, data=None, **_kwargs):
+        if endpoint == "getMe":
+            return {"id": 7, "first_name": "ETM", "is_bot": True}
+        calls.append(endpoint)
+        if endpoint in ("sendMessage", "editMessageText"):
+            return {
+                "message_id": 2,
+                "date": int(time.time()),
+                "chat": {"id": data["chat_id"], "type": "private"},
+                "text": data["text"],
+            }
+        return True
+
+    def callback(update, _context):
+        status = update.message.reply_text("正在获取二维码")
+        updated = status.edit_text("请扫描二维码登录")
+        assert isinstance(updated, Message)
+        assert updated.delete() is True
+
+    with patch.object(Bot, "_post", new=fake_post):
+        runtime = PTB22Runtime(
+            ApplicationBuilder().token(
+                "000000000:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            ).build()
+        )
+        runtime.dispatcher.add_handler(MessageHandler(filters.TEXT, callback))
+        update = Update(
+            update_id=3,
+            message=Message(
+                message_id=1,
+                date=None,
+                chat=Chat(id=123, type=Chat.PRIVATE),
+                from_user=User(id=9, first_name="Admin", is_bot=False),
+                text="/login",
+            ),
+        )
+        try:
+            runtime.runner.submit(runtime.application.process_update(update))
+            assert calls == ["sendMessage", "editMessageText", "deleteMessage"]
+        finally:
+            runtime.stop()
