@@ -118,6 +118,6 @@ def test_qr_refresh_edits_existing_status_and_reports_progress():
     query.answer.assert_called_once()
     message.reply_text.assert_not_called()
     assert message.edit_text.call_count == 2
-    extra.assert_called_once_with("reauth")
+    extra.assert_called_once_with("refresh_login_qr")
     buttons = message.edit_text.call_args.kwargs["reply_markup"].inline_keyboard[0]
     assert [item.text for item in buttons] == ["刷新二维码", "撤回二维码"]
