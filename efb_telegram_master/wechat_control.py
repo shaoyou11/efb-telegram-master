@@ -78,7 +78,7 @@ class WeChatControl:
             status.edit_text(pending_text)
         try:
             result = self.call_extra(command)
-            pending_login = command == "reauth" and str(result or "").startswith(
+            pending_login = command in ("reauth", "refresh_login_qr") and str(result or "").startswith(
                 (LOGIN_PROMPT_TEXT, "登录二维码仍在有效期内", "登录二维码正在生成")
             )
             if pending_login:
@@ -139,8 +139,8 @@ class WeChatControl:
             query.answer("正在处理，请稍候")
             self.run_action(
                 query.message,
-                "reauth" if action == "login_refresh" else "cancel_login_qr",
-                "正在检查二维码……" if action == "login_refresh" else "正在撤回二维码……",
+                "refresh_login_qr" if action == "login_refresh" else "cancel_login_qr",
+                "正在生成新二维码，旧码将失效……" if action == "login_refresh" else "正在撤回二维码……",
                 edit=True,
             )
             return
