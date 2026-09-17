@@ -1,4 +1,5 @@
 import json
+import logging
 import hashlib
 import math
 import os
@@ -667,7 +668,6 @@ class DeliveryGuard:
         self.telemetry = telemetry
         self.channel = channel
         self.state_path = Path(state_path)
-        self.last_alert_key = None
 
     def _recovery_state(self):
         try:
@@ -678,7 +678,10 @@ class DeliveryGuard:
     def _save_recovery_state(self, state):
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.state_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(state, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, self.state_path)
 
     @staticmethod
@@ -692,41 +695,50 @@ class DeliveryGuard:
             return False
 
     def _alert(self, text):
-        for admin in self.channel.config["admins"]:
-            self.channel.bot_manager.send_message(admin, text)
+        # Recovery notices must not use the ordinary infinite delivery retry.
+        for admin in dict.fromkeys(self.channel.config["admins"]):
+            try:
+                self.channel.bot_manager.updater.bot.send_message(
+                    admin, text, read_timeout=10, write_timeout=10,
+                    connect_timeout=5, pool_timeout=5)
+            except Exception as error:
+                logging.getLogger(__name__).warning(
+                    "Recovery notice unconfirmed; not retrying (%s)", type(error).__name__)
 
     def check_once(self, now=None):
-        now = now or time.time()
+        now = time.time() if now is None else now
         recovery = self._recovery_state()
         pending = self.telemetry.state.get("pending") or {}
         logged_in = self._logged_in()
         action = recovery_action(
-            self.telemetry.state,
-            logged_in,
-            now,
-            recovery.get("last_restart_at", 0),
-            recovery.get("last_restart_uid", ""),
+            self.telemetry.state, logged_in, now,
+            recovery.get("last_restart_at", 0), recovery.get("last_restart_uid", ""),
         )
-        key = (pending.get("uid"), action)
         if action == "none":
-            self.last_alert_key = None
             return action
-        if key != self.last_alert_key:
-            if action == "restart":
-                self._alert("EFB 检测到消息链路卡住超过10分钟；本消息最多只重启一次 EFB，微信容器不会重启。")
-            else:
-                if not logged_in:
-                    suffix = "微信已退出，因此不会重启 EFB。"
-                elif str(pending.get("uid") or "") == str(recovery.get("last_restart_uid") or ""):
-                    suffix = "本消息已经尝试过一次恢复，不会再次重启。"
-                else:
-                    suffix = "处于1小时冷却期，不会重复重启。"
-                self._alert("EFB 检测到消息链路异常。" + suffix)
-            self.last_alert_key = key
+        uid = str(pending.get("uid") or "")
+        alert_claimed = str(recovery.get("last_alert_uid") or "") == uid
+        # Existing restart records also claim their notice across upgrades.
+        alert_claimed = alert_claimed or str(recovery.get("last_restart_uid") or "") == uid
+        if action != "restart" and alert_claimed:
+            return action
         if action == "restart":
             recovery["last_restart_at"] = now
-            recovery["last_restart_uid"] = str(pending.get("uid") or "")
+            recovery["last_restart_uid"] = uid
+        if not alert_claimed:
+            recovery["last_alert_uid"] = uid
+        try:
             self._save_recovery_state(recovery)
+        except OSError:
+            logging.getLogger(__name__).error("Recovery state unavailable; no notice or restart attempted")
+            return "none"
+        if not alert_claimed:
+            if action == "restart":
+                text = "EFB 检测到消息链路卡住超过10分钟；本消息最多只重启一次 EFB，微信容器不会重启。"
+            else:
+                suffix = "微信已退出，因此不会重启 EFB。" if not logged_in else "处于1小时冷却期，不会重复重启。"
+                text = "EFB 检测到消息链路异常。" + suffix
+            self._alert(text)
         return action
 
     def run(self):
