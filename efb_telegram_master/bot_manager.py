@@ -17,7 +17,7 @@ from telegram.ext import ApplicationBuilder, CallbackContext, MessageHandler
 
 from . import utils
 from .locale_handler import LocaleHandler
-from .delivery_outcome import MEDIA_SEND_METHODS, MediaSendUnconfirmed
+from .delivery_outcome import CREATE_SEND_METHODS, MEDIA_SEND_METHODS, MediaSendUnconfirmed, SendUnconfirmed
 from .locale_mixin import LocaleMixin
 from .rate_limiter import TelegramRateLimiter
 from .ptb_filters import Filters
@@ -78,7 +78,7 @@ class TelegramBotManager(LocaleMixin):
 
         @classmethod
         def retry_on_timeout(cls, fn: Callable):
-            """Retry network timeouts and Telegram flood-control responses."""
+            """Bound retries; a lost response cannot safely replay a new message."""
             @wraps(fn)
             def retry_wrapper(*args, **kwargs):
                 def invoke():
@@ -89,15 +89,19 @@ class TelegramBotManager(LocaleMixin):
                     except telegram.error.NetworkError as error:
                         if getattr(fn, "__name__", "") in MEDIA_SEND_METHODS:
                             raise MediaSendUnconfirmed() from error
+                        if getattr(fn, "__name__", "") in CREATE_SEND_METHODS:
+                            raise SendUnconfirmed() from error
                         raise
                 if not cls.enable_retry:
                     return invoke()
-                cls.logger.debug("Trying to call %s with infinite retry.", fn)
+                cls.logger.debug("Trying to call %s with bounded retry.", fn)
                 timeout_backoff = 1.0
-                while True:
+                for attempt in range(3):
                     try:
                         return invoke()
                     except telegram.error.RetryAfter as error:
+                        if attempt == 2 or retry_after_seconds(error.retry_after) > 60:
+                            raise
                         retry_after = max(1, int(retry_after_seconds(getattr(error, "retry_after", 1))))
                         cls.logger.warning(
                             "Telegram flood control hit for %s, sleep %ss then retry.",
@@ -106,6 +110,8 @@ class TelegramBotManager(LocaleMixin):
                         )
                         time.sleep(retry_after)
                     except telegram.error.TimedOut as error:
+                        if attempt == 2:
+                            raise
                         cls.logger.warning(
                             "Telegram timeout for %s, sleep %.1fs then retry. (%s)",
                             fn,

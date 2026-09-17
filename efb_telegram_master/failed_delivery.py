@@ -44,8 +44,13 @@ class FailedDeliveryStore:
 
     def put(self, token: str, record: Dict[str, Any]) -> None:
         with self.lock:
+            previous = dict(self.records)
             self.records[str(token)] = dict(record)
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.records = previous
+                raise
 
     def get(self, token: str) -> Optional[Dict[str, Any]]:
         with self.lock:
@@ -55,8 +60,13 @@ class FailedDeliveryStore:
 
     def remove(self, token: str) -> None:
         with self.lock:
+            previous = dict(self.records)
             if self.records.pop(str(token), None) is not None:
-                self._save()
+                try:
+                    self._save()
+                except Exception:
+                    self.records = previous
+                    raise
 
     def items(self):
         with self.lock:
