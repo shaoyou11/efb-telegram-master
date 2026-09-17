@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from telegram.error import TimedOut, NetworkError, RetryAfter
+from telegram.error import TimedOut, NetworkError, RetryAfter, BadRequest
 from efb_telegram_master.bot_manager import TelegramBotManager
 from efb_telegram_master.delivery_outcome import MediaSendUnconfirmed
 from efb_telegram_master.slave_message import SlaveMessageProcessor
@@ -39,6 +39,16 @@ class MediaOutcomeTests(unittest.TestCase):
         with patch.object(TelegramBotManager.Decorators,'enable_retry',True), patch('efb_telegram_master.bot_manager.time.sleep'):
             self.assertEqual(TelegramBotManager.Decorators.retry_on_timeout(send_video)(),'ok')
         self.assertEqual(calls.call_count,2)
+
+    def test_explicit_bad_request_is_not_an_unknown_outcome(self):
+        calls=Mock(side_effect=BadRequest('rejected'))
+        def send_video(**kwargs):return calls(**kwargs)
+        p=object.__new__(SlaveMessageProcessor);p.logger=Mock()
+        p.dispatch_message=TelegramBotManager.Decorators.retry_on_timeout(send_video)
+        with patch.object(TelegramBotManager.Decorators,'enable_retry',True):
+            with self.assertRaises(BadRequest):
+                p.dispatch_with_retry(msg=SimpleNamespace(uid='one',path='/video',file=None))
+        calls.assert_called_once()
 
     def test_raw_outer_timeout_does_not_reopen_media_attempt(self):
         p=object.__new__(SlaveMessageProcessor);p.logger=Mock();p.dispatch_message=Mock(side_effect=TimedOut())

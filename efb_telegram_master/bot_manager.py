@@ -81,6 +81,8 @@ class TelegramBotManager(LocaleMixin):
                 def invoke():
                     try:
                         return fn(*args, **kwargs)
+                    except telegram.error.BadRequest:
+                        raise  # Telegram explicitly rejected this request.
                     except telegram.error.NetworkError as error:
                         if getattr(fn, "__name__", "") in MEDIA_SEND_METHODS:
                             raise MediaSendUnconfirmed() from error
