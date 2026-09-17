@@ -48,6 +48,9 @@ class TelegramBotManager(LocaleMixin):
     def _normalize_media_kwargs(kwargs):
         """Keep legacy multipart encoding from receiving mapping values."""
         normalized = dict(kwargs)
+        # Large attachments need time for the local Bot API to obtain Telegram's response.
+        normalized.setdefault("read_timeout", 300)
+        normalized.setdefault("write_timeout", 300)
         for key, value in list(normalized.items()):
             if key == "api_kwargs" and isinstance(value, collections.abc.Mapping):
                 api_kwargs = dict(value)
@@ -81,6 +84,8 @@ class TelegramBotManager(LocaleMixin):
                 def invoke():
                     try:
                         return fn(*args, **kwargs)
+                    except telegram.error.BadRequest:
+                        raise  # Telegram explicitly rejected this request.
                     except telegram.error.NetworkError as error:
                         if getattr(fn, "__name__", "") in MEDIA_SEND_METHODS:
                             raise MediaSendUnconfirmed() from error

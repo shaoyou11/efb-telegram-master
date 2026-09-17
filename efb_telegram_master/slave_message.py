@@ -183,6 +183,8 @@ class SlaveMessageProcessor(LocaleMixin):
                     attempt + 1,
                 )
                 time.sleep(delay)
+            except telegram.error.BadRequest:
+                raise
             except (telegram.error.TimedOut, telegram.error.NetworkError) as error:
                 if getattr(msg, "path", None):
                     raise MediaSendUnconfirmed() from error
