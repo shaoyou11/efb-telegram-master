@@ -42,6 +42,7 @@ from .chat_object_cache import ChatObjectCacheManager
 from .chat_title_sync import should_auto_rename, should_sync_topic
 from .commands import ETMCommandMsgStorage
 from .constants import Emoji
+from .delivery_outcome import MediaSendUnconfirmed
 from .delivery_policy import DeliveryPolicy
 from .delivery_telemetry import DeliveryTelemetry, normalize_message_type, sanitize_failure
 from .failed_delivery import FailedDeliveryStore
@@ -182,7 +183,9 @@ class SlaveMessageProcessor(LocaleMixin):
                     attempt + 1,
                 )
                 time.sleep(delay)
-            except (telegram.error.TimedOut, telegram.error.NetworkError):
+            except (telegram.error.TimedOut, telegram.error.NetworkError) as error:
+                if getattr(msg, "path", None):
+                    raise MediaSendUnconfirmed() from error
                 if attempt >= self.DELIVERY_RETRY_COUNT:
                     raise
                 delay = float(attempt * 2)
@@ -374,14 +377,23 @@ class SlaveMessageProcessor(LocaleMixin):
             else:
                 self.failed_messages[token] = {"msg": msg, "expires": record["expires"]}
                 self.mark_delivery(msg, "stored_for_retry")
-                rows.append([InlineKeyboardButton("重新发送", callback_data=f"retry:{token}")])
+                label = "确认未收到后重发" if isinstance(error, MediaSendUnconfirmed) else "重新发送"
+                rows.append([InlineKeyboardButton(label, callback_data=f"retry:{token}")])
         rows.append([InlineKeyboardButton("关闭", callback_data="retry:close")])
-        text = ("EFB 消息转发失败\n\n"
+        title = "EFB 附件发送结果未确认" if isinstance(error, MediaSendUnconfirmed) else "EFB 消息转发失败"
+        text = (title + "\n\n"
                 f"类型：{msg.type}\n大小：{size / 1024 / 1024:.2f} MB\n"
                 f"原因：{sanitize_failure(error)}")
         destination = tg_dest or self.channel.config["admins"][0]
-        self.bot.send_message(destination, text, message_thread_id=thread_id,
-                              reply_markup=InlineKeyboardMarkup(rows))
+        try:
+            # A failed notice must not replay the original attachment.
+            self.bot.updater.bot.send_message(
+                destination, text, message_thread_id=thread_id,
+                reply_markup=InlineKeyboardMarkup(rows), read_timeout=10,
+                write_timeout=10, connect_timeout=5, pool_timeout=5)
+        except Exception as notice_error:
+            self.logger.warning("Delivery notice unconfirmed; no resend (%s)",
+                                type(notice_error).__name__)
 
     def _message_from_failure_record(self, record):
         channel_id, chat_uid, _ = utils.chat_id_str_to_id(record["chat"])

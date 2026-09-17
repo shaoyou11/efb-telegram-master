@@ -17,6 +17,7 @@ from telegram.ext import ApplicationBuilder, CallbackContext, MessageHandler
 
 from . import utils
 from .locale_handler import LocaleHandler
+from .delivery_outcome import MEDIA_SEND_METHODS, MediaSendUnconfirmed
 from .locale_mixin import LocaleMixin
 from .rate_limiter import TelegramRateLimiter
 from .ptb_filters import Filters
@@ -77,13 +78,20 @@ class TelegramBotManager(LocaleMixin):
             """Retry network timeouts and Telegram flood-control responses."""
             @wraps(fn)
             def retry_wrapper(*args, **kwargs):
+                def invoke():
+                    try:
+                        return fn(*args, **kwargs)
+                    except telegram.error.NetworkError as error:
+                        if getattr(fn, "__name__", "") in MEDIA_SEND_METHODS:
+                            raise MediaSendUnconfirmed() from error
+                        raise
                 if not cls.enable_retry:
-                    return fn(*args, **kwargs)
+                    return invoke()
                 cls.logger.debug("Trying to call %s with infinite retry.", fn)
                 timeout_backoff = 1.0
                 while True:
                     try:
-                        return fn(*args, **kwargs)
+                        return invoke()
                     except telegram.error.RetryAfter as error:
                         retry_after = max(1, int(retry_after_seconds(getattr(error, "retry_after", 1))))
                         cls.logger.warning(
