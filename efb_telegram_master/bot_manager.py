@@ -20,6 +20,7 @@ from .locale_handler import LocaleHandler
 from .delivery_outcome import CREATE_SEND_METHODS, MEDIA_SEND_METHODS, MediaSendUnconfirmed, SendUnconfirmed
 from .locale_mixin import LocaleMixin
 from .rate_limiter import TelegramRateLimiter
+from .network_request import SafeConnectRequest
 from .ptb_filters import Filters
 from .ptb22_runtime import PTB22Runtime, normalize_proxy_url, retry_after_seconds
 
@@ -294,7 +295,7 @@ class TelegramBotManager(LocaleMixin):
         self.channel: 'TelegramChannel' = channel
         config = self.channel.config
 
-        req_kwargs = {'read_timeout': 15}
+        req_kwargs = {'read_timeout': 60, 'write_timeout': 30, 'connect_timeout': 5, 'pool_timeout': 5}
         conf_req_kwargs = config.get('request_kwargs')
         if isinstance(conf_req_kwargs, collections.abc.Mapping):
             req_kwargs.update(conf_req_kwargs)
@@ -307,12 +308,14 @@ class TelegramBotManager(LocaleMixin):
             builder = builder.base_url(api_base_url)
         if api_base_file_url:
             builder = builder.base_file_url(api_base_file_url)
-        for key in ("read_timeout", "write_timeout", "connect_timeout", "pool_timeout"):
-            if key in req_kwargs:
-                builder = getattr(builder, key)(req_kwargs[key])
         proxy_url = normalize_proxy_url(req_kwargs)
-        if proxy_url:
-            builder = builder.proxy(proxy_url).get_updates_proxy(proxy_url)
+        timeouts = {key: req_kwargs[key] for key in (
+            "read_timeout", "write_timeout", "connect_timeout", "pool_timeout",
+        ) if key in req_kwargs}
+        builder = builder.request(SafeConnectRequest(proxy=proxy_url, **timeouts))
+        builder = builder.get_updates_request(SafeConnectRequest(
+            connection_pool_size=1, proxy=proxy_url,
+        ))
         builder = builder.local_mode(bool(channel.flag('local_tdlib_api')))
         self.updater = PTB22Runtime(builder.build())
 
