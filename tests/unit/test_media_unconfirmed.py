@@ -13,6 +13,14 @@ from efb_telegram_master.slave_message import SlaveMessageProcessor
 from efb_telegram_master.failed_delivery import FailedDeliveryStore
 
 class MediaOutcomeTests(unittest.TestCase):
+    def test_media_timeout_budget_preserves_explicit_values(self):
+        defaults = TelegramBotManager._normalize_media_kwargs({})
+        self.assertEqual(defaults['read_timeout'], 300)
+        self.assertEqual(defaults['write_timeout'], 300)
+        explicit = TelegramBotManager._normalize_media_kwargs({'read_timeout':40,'write_timeout':60})
+        self.assertEqual(explicit['read_timeout'],40)
+        self.assertEqual(explicit['write_timeout'],60)
+
     def test_media_timeout_never_retries_at_either_layer(self):
         for enabled in [False, True]:
             calls = Mock(side_effect=TimedOut())
