@@ -1,4 +1,5 @@
 import json
+import copy
 import logging
 import hashlib
 import math
@@ -71,6 +72,7 @@ class DeliveryTelemetry:
         if self.state.get("pending") is not None:
             self.state["pending"] = None
             self._save()
+        self.state["inflight"] = {}
         self.stats = self._load_stats()
         self.trace_path = Path(trace_path) if trace_path else self.path.with_name("delivery-trace.json")
         self.traces = self._load_traces()
@@ -370,24 +372,34 @@ class DeliveryTelemetry:
             now = time.time()
             self.state["last_inbound_at"] = now
             message_type = normalize_message_type(message_type)
-            self.state["pending"] = {"uid": str(uid), "type": message_type,
-                                     "size": int(size), "at": now}
+            self.state["inflight"][str(uid)] = {"uid": str(uid), "type": message_type,
+                                               "size": int(size), "at": now}
+            self._refresh_pending()
             self._record_stat("inbound", now, message_type=message_type)
             self._record_trace(uid, "received", now, message_type, size, trace_id=trace_id)
             self._save()
             self._save_stats()
 
+    def _refresh_pending(self):
+        self.state["pending"] = min(
+            self.state["inflight"].values(), key=lambda item: item["at"], default=None,
+        )
+
+    def snapshot(self):
+        with self.lock:
+            return copy.deepcopy(self.state)
+
     def _finish(self, uid: str, now: float):
-        pending = self.state.get("pending") or {}
-        if str(pending.get("uid") or "") != str(uid):
+        pending = self.state["inflight"].pop(str(uid), None)
+        if pending is None:
             return None, "other"
+        self._refresh_pending()
         try:
             latency_ms = max(0.0, (now - float(pending["at"])) * 1000)
         except (KeyError, TypeError, ValueError):
             latency_ms = None
         if latency_ms is not None:
             self.state["last_latency_ms"] = round(latency_ms)
-        self.state["pending"] = None
         return latency_ms, normalize_message_type(pending.get("type"))
 
     def delivered(self, uid: str, trace_id: str = "", silent: bool = False):
@@ -671,7 +683,8 @@ class DeliveryGuard:
 
     def _recovery_state(self):
         try:
-            return json.loads(self.state_path.read_text(encoding="utf-8"))
+            state = json.loads(self.state_path.read_text(encoding="utf-8"))
+            return state if isinstance(state, dict) else {}
         except (OSError, ValueError, TypeError):
             return {"last_restart_at": 0, "last_restart_uid": ""}
 
@@ -686,13 +699,23 @@ class DeliveryGuard:
 
     @staticmethod
     def _logged_in() -> bool:
+        # Cached Bridge state: never probe/click the WeChat client here.
         try:
-            req = request.Request("http://127.0.0.1:18888/api/?type=0", data=b"{}",
-                                  headers={"Content-Type": "application/json"})
-            with request.urlopen(req, timeout=5) as response:
-                return json.loads(response.read().decode("utf-8")).get("is_login") == 1
+            with request.urlopen("http://127.0.0.1:19088/healthz", timeout=5) as response:
+                return json.loads(response.read().decode("utf-8")).get("is_login") is True
         except Exception:
             return False
+
+    @staticmethod
+    def _scan_active(now):
+        path = Path(os.getenv("WECHAT_MANUAL_LOGIN_STATE", "/data/watchdog/state/manual-login-session.json"))
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+            return float(state.get("expires_at", 0)) > now
+        except FileNotFoundError:
+            return False
+        except (OSError, ValueError, TypeError, AttributeError):
+            return True  # Unknown lease state is not permission to recover.
 
     def _alert(self, text):
         # Recovery notices must not use the ordinary infinite delivery retry.
@@ -707,45 +730,40 @@ class DeliveryGuard:
 
     def check_once(self, now=None):
         now = time.time() if now is None else now
+        if self._scan_active(now):
+            return "none"
+        state = self.telemetry.snapshot() if hasattr(self.telemetry, "snapshot") else dict(self.telemetry.state)
+        pending = state.get("pending") or {}
+        started = pending.get("at")
+        if not isinstance(started, (int, float)) or now - started < 600:
+            return "none"
         recovery = self._recovery_state()
-        pending = self.telemetry.state.get("pending") or {}
-        logged_in = self._logged_in()
-        action = recovery_action(
-            self.telemetry.state, logged_in, now,
-            recovery.get("last_restart_at", 0), recovery.get("last_restart_uid", ""),
-        )
-        if action == "none":
-            return action
+        # A slow/unconfirmed external send is not evidence that EFB must exit.
+        # Killing it here can replay accepted messages from the durable queue.
+        action = "alert"
         uid = str(pending.get("uid") or "")
         alert_claimed = str(recovery.get("last_alert_uid") or "") == uid
         # Existing restart records also claim their notice across upgrades.
         alert_claimed = alert_claimed or str(recovery.get("last_restart_uid") or "") == uid
-        if action != "restart" and alert_claimed:
+        if alert_claimed:
             return action
-        if action == "restart":
-            recovery["last_restart_at"] = now
-            recovery["last_restart_uid"] = uid
-        if not alert_claimed:
-            recovery["last_alert_uid"] = uid
+        recovery["last_alert_uid"] = uid
         try:
             self._save_recovery_state(recovery)
         except OSError:
             logging.getLogger(__name__).error("Recovery state unavailable; no notice or restart attempted")
             return "none"
         if not alert_claimed:
-            if action == "restart":
-                text = "EFB 检测到消息链路卡住超过10分钟；本消息最多只重启一次 EFB，微信容器不会重启。"
-            else:
-                suffix = "微信已退出，因此不会重启 EFB。" if not logged_in else "处于1小时冷却期，不会重复重启。"
-                text = "EFB 检测到消息链路异常。" + suffix
-            self._alert(text)
+            self._alert("EFB 有消息超过10分钟未完成；已保留当前任务，不会因此自动重启或重发。请检查网络和投递队列。")
         return action
 
     def run(self):
         while True:
             time.sleep(60)
-            if self.check_once() == "restart":
-                os._exit(75)
+            try:
+                self.check_once()
+            except Exception as error:
+                logging.getLogger(__name__).warning("Delivery guard check failed (%s)", type(error).__name__)
 
     def start(self):
         threading.Thread(target=self.run, name="efb-delivery-guard", daemon=True).start()
@@ -807,14 +825,22 @@ class DigestGuard:
             f"失败：{delta['failed']} 条\n\n"
             "仅统计数量，不保存消息正文。"
         )
-        for admin in self.channel.config["admins"]:
-            self.channel.bot_manager.send_message(admin, text)
+        for admin in dict.fromkeys(self.channel.config["admins"]):
+            try:
+                self.channel.bot_manager.updater.bot.send_message(
+                    admin, text, read_timeout=10, write_timeout=10,
+                    connect_timeout=5, pool_timeout=5)
+            except Exception as error:
+                logging.getLogger(__name__).warning("Digest notice unconfirmed (%s)", type(error).__name__)
         return "sent"
 
     def run(self):
         while True:
             time.sleep(60)
-            self.check_once()
+            try:
+                self.check_once()
+            except Exception as error:
+                logging.getLogger(__name__).warning("Digest check failed (%s)", type(error).__name__)
 
     def start(self):
         threading.Thread(target=self.run, name="efb-digest-guard", daemon=True).start()

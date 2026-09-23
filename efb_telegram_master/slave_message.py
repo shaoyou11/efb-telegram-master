@@ -42,7 +42,7 @@ from .chat_object_cache import ChatObjectCacheManager
 from .chat_title_sync import should_auto_rename, should_sync_topic
 from .commands import ETMCommandMsgStorage
 from .constants import Emoji
-from .delivery_outcome import MediaSendUnconfirmed
+from .delivery_outcome import MediaSendUnconfirmed, SendUnconfirmed
 from .delivery_policy import DeliveryPolicy
 from .delivery_telemetry import DeliveryTelemetry, normalize_message_type, sanitize_failure
 from .failed_delivery import FailedDeliveryStore
@@ -173,7 +173,7 @@ class SlaveMessageProcessor(LocaleMixin):
                 self.dispatch_message(**kwargs)
                 return
             except telegram.error.RetryAfter as error:
-                if attempt >= self.DELIVERY_RETRY_COUNT:
+                if attempt >= self.DELIVERY_RETRY_COUNT or retry_after_seconds(error.retry_after) > 60:
                     raise
                 delay = max(1.0, retry_after_seconds(error.retry_after))
                 self.logger.warning(
@@ -188,16 +188,7 @@ class SlaveMessageProcessor(LocaleMixin):
             except (telegram.error.TimedOut, telegram.error.NetworkError) as error:
                 if getattr(msg, "path", None):
                     raise MediaSendUnconfirmed() from error
-                if attempt >= self.DELIVERY_RETRY_COUNT:
-                    raise
-                delay = float(attempt * 2)
-                self.logger.warning(
-                    "[%s] Telegram 网络异常，%.1f 秒后进行第 %s 次发送。",
-                    msg.uid,
-                    delay,
-                    attempt + 1,
-                )
-                time.sleep(delay)
+                raise SendUnconfirmed() from error
 
     def is_silent(self, msg: Message) -> Optional[bool]:
         """Determine if a message shall be sent silently.
@@ -242,7 +233,7 @@ class SlaveMessageProcessor(LocaleMixin):
             except OSError:
                 pass
         trace_id = self.delivery_trace_id(msg)
-        self.telemetry.inbound(
+        self._record_telemetry("inbound",
             str(msg.uid), self.delivery_message_type(msg), size, trace_id,
         )
         try:
@@ -252,7 +243,7 @@ class SlaveMessageProcessor(LocaleMixin):
             policy = self.delivery_policy(msg)
             if policy is DeliveryPolicy.FILTERED:
                 self.logger.debug("[%s] Message is not delivered per chat delivery policy.", xid)
-                self.telemetry.filtered(str(msg.uid), trace_id)
+                self._record_telemetry("filtered", str(msg.uid), trace_id)
                 self.mark_delivery(msg, "filtered")
                 return msg
 
@@ -263,7 +254,7 @@ class SlaveMessageProcessor(LocaleMixin):
                 )
                 if existing:
                     self.logger.info("[%s] 文件已经发送，跳过重复投递。", xid)
-                    self.telemetry.delivered(str(msg.uid), trace_id)
+                    self._record_telemetry("delivered", str(msg.uid), trace_id)
                     self.mark_delivery(msg, "delivered")
                     return msg
 
@@ -272,7 +263,7 @@ class SlaveMessageProcessor(LocaleMixin):
             silent = self.is_silent(msg)
             if silent is None:
                 self.logger.debug("[%s] Message is not delivered per silent settings.", xid)
-                self.telemetry.filtered(str(msg.uid), trace_id)
+                self._record_telemetry("filtered", str(msg.uid), trace_id)
                 self.mark_delivery(msg, "skipped")
                 return msg
             if policy is DeliveryPolicy.SILENT:
@@ -280,7 +271,7 @@ class SlaveMessageProcessor(LocaleMixin):
 
             if tg_dest is None:
                 self.logger.debug("[%s] Sender of the message is muted.", xid)
-                self.telemetry.filtered(str(msg.uid), trace_id)
+                self._record_telemetry("filtered", str(msg.uid), trace_id)
                 self.mark_delivery(msg, "skipped")
                 return msg
 
@@ -300,7 +291,7 @@ class SlaveMessageProcessor(LocaleMixin):
                                      'but it does not exist in database. Sending new message instead.',
                                      msg.uid)
 
-            self.telemetry.sending(str(msg.uid), trace_id)
+            self._record_telemetry("sending", str(msg.uid), trace_id)
             self.dispatch_with_retry(
                 msg=msg,
                 msg_template=msg_template,
@@ -309,11 +300,11 @@ class SlaveMessageProcessor(LocaleMixin):
                 thread_id=thread_id,
                 silent=silent,
             )
-            self.telemetry.delivered(str(msg.uid), trace_id, silent=bool(silent))
+            self._record_telemetry("delivered", str(msg.uid), trace_id, silent=bool(silent))
             self.mark_delivery(msg, "delivered")
-            self.channel.wechat_read_ui.mark_message_read(msg)
+            self._mark_read(msg)
         except Exception as e:
-            self.telemetry.failed(str(msg.uid), repr(e), trace_id)
+            self._record_telemetry("failed", str(msg.uid), repr(e), trace_id)
             self.mark_delivery(msg, "failed", repr(e))
             self.logger.error("Error occurred while processing message from slave channel.\nMessage: %s\n%s\n%s",
                               repr(msg), repr(e), traceback.format_exc())
@@ -328,12 +319,24 @@ class SlaveMessageProcessor(LocaleMixin):
             )
         return msg
 
+    def _record_telemetry(self, event, *args, **kwargs):
+        try:
+            getattr(self.telemetry, event)(*args, **kwargs)
+        except Exception as error:
+            self.logger.warning("Delivery telemetry unavailable (%s)", type(error).__name__)
+
+    def _mark_read(self, msg):
+        try:
+            self.channel.wechat_read_ui.mark_message_read(msg)
+        except Exception as error:
+            self.logger.warning("Read acknowledgement unavailable (%s)", type(error).__name__)
+
     def _failure_record(self, msg, tg_dest, thread_id, msg_template, silent, error):
         destination = tg_dest or self.channel.config["admins"][0]
         return {
             "uid": str(msg.uid),
             "type": msg.type.name,
-            "path": str(msg.path),
+            "path": str(msg.path) if msg.path else "",
             "filename": msg.filename,
             "mime": msg.mime,
             "text": msg.text or "",
@@ -352,15 +355,14 @@ class SlaveMessageProcessor(LocaleMixin):
                                  msg_template="", silent=False):
         token = None
         rows = []
-        if msg.path and os.path.isfile(msg.path):
+        if (msg.path and os.path.isfile(msg.path)) or msg.type == MsgType.Text:
             token = secrets.token_hex(6)
             durable_path = None
             try:
-                durable_path = persist_failed_media(
-                    msg.path,
-                    token,
-                    self.failed_media_root,
-                )
+                if msg.path:
+                    durable_path = persist_failed_media(
+                        msg.path, token, self.failed_media_root,
+                    )
                 record = self._failure_record(
                     msg,
                     tg_dest,
@@ -369,8 +371,8 @@ class SlaveMessageProcessor(LocaleMixin):
                     silent,
                     error,
                 )
-                record["path"] = str(durable_path)
-                record["storage"] = "durable"
+                record["path"] = str(durable_path) if durable_path else ""
+                record["storage"] = "durable" if durable_path else "text"
                 self.failure_store.put(token, record)
             except Exception:
                 if durable_path is not None:
@@ -379,10 +381,10 @@ class SlaveMessageProcessor(LocaleMixin):
             else:
                 self.failed_messages[token] = {"msg": msg, "expires": record["expires"]}
                 self.mark_delivery(msg, "stored_for_retry")
-                label = "确认未收到后重发" if isinstance(error, MediaSendUnconfirmed) else "重新发送"
+                label = "确认未收到后重发" if isinstance(error, SendUnconfirmed) else "重新发送"
                 rows.append([InlineKeyboardButton(label, callback_data=f"retry:{token}")])
         rows.append([InlineKeyboardButton("关闭", callback_data="retry:close")])
-        title = "EFB 附件发送结果未确认" if isinstance(error, MediaSendUnconfirmed) else "EFB 消息转发失败"
+        title = "EFB 消息发送结果未确认" if isinstance(error, SendUnconfirmed) else "EFB 消息转发失败"
         text = (title + "\n\n"
                 f"类型：{msg.type}\n大小：{size / 1024 / 1024:.2f} MB\n"
                 f"原因：{sanitize_failure(error)}")
@@ -414,8 +416,9 @@ class SlaveMessageProcessor(LocaleMixin):
         msg.type = MsgType[record["type"]]
         msg.chat = chat
         msg.author = author
-        msg.path = Path(record["path"])
-        msg.file = open(msg.path, "rb")
+        if record.get("path"):
+            msg.path = Path(record["path"])
+            msg.file = open(msg.path, "rb")
         msg.filename = record.get("filename")
         msg.mime = record.get("mime")
         msg.text = record.get("text") or ""
@@ -436,11 +439,12 @@ class SlaveMessageProcessor(LocaleMixin):
                 ),
                 silent=bool(record.get("silent", False)),
             )
-            self.telemetry.delivered(str(msg.uid))
+            self._record_telemetry("delivered", str(msg.uid))
             self.mark_delivery(msg, "delivered")
-            self.channel.wechat_read_ui.mark_message_read(msg)
+            self._mark_read(msg)
             self.failure_store.remove(token)
-            cleanup_failed_media(record["path"], self.failed_media_root)
+            if record.get("path"):
+                cleanup_failed_media(record["path"], self.failed_media_root)
             self.failed_messages.pop(token, None)
         finally:
             if msg.file and not msg.file.closed:
@@ -459,7 +463,7 @@ class SlaveMessageProcessor(LocaleMixin):
         if not record:
             query.answer("重试已失效，请等待微信重新发送。", show_alert=True)
             return
-        if not os.path.isfile(record["path"]):
+        if record.get("path") and not os.path.isfile(record["path"]):
             query.answer("原文件已不存在，无法重试。", show_alert=True)
             return
         query.answer("正在重新发送")
@@ -654,7 +658,7 @@ class SlaveMessageProcessor(LocaleMixin):
 
         # Generate chat text template & Decide type target
         tg_dest = TelegramChatID(self.channel.config['admins'][0])
-        
+
         if tg_chat:
             tg_dest = TelegramChatID(int(utils.chat_id_str_to_id(tg_chat)[1]))
         if self.channel.topic_group:

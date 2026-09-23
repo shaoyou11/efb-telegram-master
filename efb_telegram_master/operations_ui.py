@@ -1178,7 +1178,7 @@ class OperationsUI:
         if kind == "pending":
             lines.extend([
                 "",
-                "待处理文件由 ComWeChat 自动投递；“立即投递”会跳过稳定等待，",
+                "未发送的文件会自动处理；结果未确认的文件需先检查聊天记录，",
                 "“删除”只删除待发记录，不删除微信原文件。",
             ])
         else:
@@ -1196,8 +1196,9 @@ class OperationsUI:
                 f"联系人：{_clean_text(record.get('author_name'), 80)}\n"
                 f"类型：{_clean_text(message.get('type'), 30)}\n"
                 f"进入时间：{format_timestamp(_record_time(record))}\n\n"
-                "状态：ComWeChat 正在等待附件准备或稳定。\n"
-                "立即投递会跳过稳定等待；删除只移除待发记录，不删除原文件。"
+                + ("状态：已开始发送但结果未确认，请先检查聊天记录，确认未收到再投递。\n"
+                 if message.get("_delivery_attempt_started") else "状态：ComWeChat 正在等待附件准备或稳定。\n")
+                + "立即投递会跳过稳定等待；删除只移除待发记录，不删除原文件。"
             )
         filename = record.get("filename") or Path(_record_path(record)).name or "附件未记录"
         return (
@@ -1208,7 +1209,7 @@ class OperationsUI:
             f"失败时间：{format_timestamp(record.get('created_at'))}\n"
             f"过期时间：{format_timestamp(record.get('expires'))}\n"
             f"原因：{redact_error(_clean_text(record.get('error'), 140))}\n"
-            f"附件：{'已持久化' if record.get('storage') == 'durable' else '未持久化'}"
+            f"保存状态：{'已持久化' if record.get('storage') in ('durable', 'text') else '未持久化'}"
         )
 
     def _comwechat_channel(self):
@@ -1262,6 +1263,8 @@ class OperationsUI:
         note = ""
         if action == "delete" and kind == "pending":
             note = "\n\n只移除待发记录，不删除微信原文件。"
+        elif action in ("push", "retry"):
+            note = "\n\n发送结果未确认时，消息可能已经送达。请先检查聊天记录，确认未收到再继续。"
         elif action == "delete":
             note = "\n\n只删除失败记录及 EFB 保存的失败副本，不删除微信原文件。"
         update.callback_query.answer()
@@ -1299,7 +1302,7 @@ class OperationsUI:
             path = record.get("path")
             if not callable(retry):
                 text = "失败投递处理器当前不可用。"
-            elif not path or not os.path.isfile(path):
+            elif record.get("storage") != "text" and (not path or not os.path.isfile(path)):
                 text = "失败附件副本已不存在，无法重新投递。"
             else:
                 try:

@@ -24,12 +24,12 @@ class GuardTests(unittest.TestCase):
             guard, channel = self.make(d)
             def timeout(*args, **kwargs):
                 state = json.loads(guard.state_path.read_text())
-                self.assertEqual(state['last_restart_uid'], 'one')
+                self.assertNotIn('last_restart_uid', state)
                 self.assertEqual(state['last_alert_uid'], 'one')
                 self.assertEqual(kwargs['read_timeout'], 10)
                 raise TimeoutError('response lost after server accepted notice')
             channel.bot_manager.updater.bot.send_message.side_effect = timeout
-            self.assertEqual(guard.check_once(now=1000), 'restart')
+            self.assertEqual(guard.check_once(now=1000), 'alert')
             self.assertEqual(guard.check_once(now=1100), 'alert')
             restored = m.DeliveryGuard(guard.telemetry, channel, guard.state_path)
             restored._logged_in = Mock(return_value=True)
@@ -50,15 +50,15 @@ class GuardTests(unittest.TestCase):
             guard._logged_in.return_value = False
             self.assertEqual(guard.check_once(now=1000), 'alert')
             guard._logged_in.return_value = True
-            self.assertEqual(guard.check_once(now=1100), 'restart')
+            self.assertEqual(guard.check_once(now=1100), 'alert')
             channel.bot_manager.updater.bot.send_message.assert_called_once()
 
     def test_new_message_after_cooldown_gets_one_new_attempt(self):
         with TemporaryDirectory() as d:
             guard, channel = self.make(d)
-            self.assertEqual(guard.check_once(now=1000), 'restart')
+            self.assertEqual(guard.check_once(now=1000), 'alert')
             guard.telemetry.state['pending'] = {'uid':'two', 'at':4000}
-            self.assertEqual(guard.check_once(now=5000), 'restart')
+            self.assertEqual(guard.check_once(now=5000), 'alert')
             self.assertEqual(channel.bot_manager.updater.bot.send_message.call_count, 2)
 
     def test_existing_restart_record_does_not_repeat_notice(self):

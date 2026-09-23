@@ -198,8 +198,10 @@ def test_digest_guard_establishes_baseline_then_reports_only_new_counts(tmp_path
     class Bot:
         def __init__(self):
             self.messages = []
+            from types import SimpleNamespace
+            self.updater = SimpleNamespace(bot=self)
 
-        def send_message(self, admin, text):
+        def send_message(self, admin, text, **kwargs):
             self.messages.append((admin, text))
 
     class Channel:
