@@ -45,7 +45,7 @@ class MasterMessageProcessor(LocaleMixin):
     """
 
     DELETE_FLAG = 'rm`'
-    TG_IMAGE_DOCUMENT_RE = re.compile(r"^tg_image_.+\.png$", re.IGNORECASE)
+    TG_IMAGE_DOCUMENT_RE = re.compile(r"^tg_image_.+\.(?:jpe?g|png|tiff?|webp)$", re.IGNORECASE)
 
     # Constants
     TYPE_DICT = {
@@ -306,7 +306,7 @@ class MasterMessageProcessor(LocaleMixin):
             if mtype is TGMsgType.Document and self.is_tg_image_document(message):
                 m.type = MsgType.Image
                 self.logger.debug(
-                    "[%s] Treat Telegram document %r as image due to tg_image_*.png rule.",
+                    "[%s] Treat Telegram document %r as image due to generated image filename rule.",
                     message_id,
                     message.document.file_name,
                 )

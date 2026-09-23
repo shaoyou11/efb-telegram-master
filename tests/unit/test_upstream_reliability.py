@@ -14,16 +14,17 @@ def build_message(file_name=None):
     return SimpleNamespace(document=document)
 
 
-def test_tg_image_document_matches_only_generated_png_names():
-    assert MasterMessageProcessor.is_tg_image_document(
-        build_message("tg_image_1999621452.png")
-    ) is True
-    assert MasterMessageProcessor.is_tg_image_document(
-        build_message("photo.png")
-    ) is False
-    assert MasterMessageProcessor.is_tg_image_document(
-        build_message("tg_image_1999621452.jpg")
-    ) is False
+def test_tg_image_document_recognizes_supported_generated_images():
+    for extension in ("jpg", "jpeg", "png", "tif", "tiff", "webp", "JPEG", "WebP"):
+        assert MasterMessageProcessor.is_tg_image_document(
+            build_message("tg_image_1999621452." + extension)
+        ) is True
+
+
+def test_tg_image_document_preserves_normal_document_handling():
+    for filename in (None, "", "photo.png", "tg_image_.jpg", "tg_image_a.svg",
+                     "tg_image_a.jpg.exe", "tg_image_a.gif", "tg_image_a.pdf"):
+        assert MasterMessageProcessor.is_tg_image_document(build_message(filename)) is False
 
 
 def test_retry_decorator_honors_retry_after(monkeypatch):
